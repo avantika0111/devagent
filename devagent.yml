@@ -1,0 +1,59 @@
+# DevAgent configuration
+# Committed alongside your code — no secrets here.
+# See README for full reference.
+
+# ---------------------------------------------------------------------------
+# Model configuration
+# ---------------------------------------------------------------------------
+
+# Primary provider — NVIDIA NIM
+provider: nvidia
+model: qwen/qwen3.5-122b-a10b
+
+# Fallback provider — Gemini free tier
+# Used automatically if NIM is unreachable or rate-limited.
+fallback_provider: gemini
+fallback_model: gemini-2.5-flash
+
+# Per-agent model overrides (optional)
+# Reasoning-heavy agents use NIM. Mechanical agents can use the fallback.
+# agent_models:
+#   plan_agent:      qwen/qwen3.5-122b-a10b   # needs strong reasoning
+#   architect_agent: qwen/qwen3.5-122b-a10b   # same
+#   review_agent:    qwen/qwen3.5-122b-a10b   # cross-file reasoning
+#   tdd_agent:       gemini-2.5-flash          # writing tests — fallback is fine
+#   github_agent:    gemini-2.5-flash          # mechanical ops — fallback is fine
+#   docker_agent:    gemini-2.5-flash          # same
+#   security_agent:  gemini-2.5-flash          # pattern scanning — fallback works
+
+max_iterations_per_agent: 15
+
+# ---------------------------------------------------------------------------
+# Agent behaviour
+# ---------------------------------------------------------------------------
+
+agents:
+
+  plan:
+    require_approval: true    # always show plan before proceeding
+    save_plans: true          # store all plans in .ai/plans/
+
+  tdd:
+    run_tests_before_implement: true
+    fail_on_no_tests: true    # refuse to implement if tests cannot be written
+    framework: pytest         # pytest | jest | unittest
+
+  security:
+    scan_on: [implement, commit]
+    fail_on: [critical, high] # severity levels that block the pipeline
+    # custom_rules: .ai/rules/security-extra.md   # optional extra rules
+
+  github:
+    branch_format: "{type}/{id}-{description}"
+    commit_format: "{type}({scope}): {description}"
+    # pr_template: .ai/pr-template.md             # optional
+
+  docker:
+    verify_build: true
+    health_check_endpoint: /health
+    startup_timeout_seconds: 30

@@ -4,47 +4,149 @@ core/base_agent.py
 The agentic loop every agent extends.
 Write this once — never rewrite it.
 
+Model routing:
+    Primary:  NVIDIA NIM  (integrate.api.nvidia.com)
+              Set NVIDIA_API_KEY in .env
+    Fallback: Gemini 2.5 Flash — free tier, no credit card
+              Set GEMINI_API_KEY in .env
+
+Both use OpenAI-compatible endpoints — one client, two providers.
+Falls back automatically if NIM is unreachable or rate-limited.
+
 Every agent inherits:
-  - run()              the full tool-call loop
-  - system_prompt      override with your agent's persona
-  - tools              override with your agent's tool definitions
-  - execute_tool()     override with your tool implementations
-
-The loop handles:
-  - Multiple tool calls per turn
-  - Memory logging of every tool call
-  - Iteration capping
-  - Error isolation (one tool failing doesn't crash the run)
-  - Graceful stopping when the agent reaches end_turn
-
-Usage:
-    class MyAgent(BaseAgent):
-        @property
-        def system_prompt(self): return "You are..."
-        @property
-        def tools(self): return [...]
-        def execute_tool(self, name, inputs): ...
-
-    agent = MyAgent(config, memory)
-    result = agent.run("Do the thing")
+    run()            the full tool-call loop
+    system_prompt    override with your agent's persona
+    tools            override with your agent's tool definitions
+    execute_tool()   override with your tool implementations
 """
 
 from __future__ import annotations
 
+import json
+import logging
+import os
 import time
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import Any, Optional
 
-import anthropic
+logger = logging.getLogger(__name__)
 
-from core.config import DevAgentConfig
-from core.memory import MemoryStore
 
+# ---------------------------------------------------------------------------
+# Exceptions
+# ---------------------------------------------------------------------------
 
 class AgentError(Exception):
     """Raised when an agent fails unrecoverably."""
     pass
 
+
+class ToolError(Exception):
+    """
+    Raise inside execute_tool() for expected tool failures.
+    The error is returned to the agent so it can recover.
+
+    Use for: file not found, API 404, invalid input.
+    Do NOT use for programming errors — let those propagate.
+    """
+    pass
+
+
+# ---------------------------------------------------------------------------
+# Response adapters
+# Wrap OpenAI responses to match the interface the agentic loop expects.
+# ---------------------------------------------------------------------------
+
+class TextBlock:
+    """Text content block."""
+    type = "text"
+
+    def __init__(self, text: str):
+        self.text = text
+
+
+class ToolUseBlock:
+    """Tool call content block."""
+    type = "tool_use"
+
+    def __init__(self, id: str, name: str, input: dict):
+        self.id    = id
+        self.name  = name
+        self.input = input
+
+
+class OpenAIResponseAdapter:
+    """
+    Wraps an OpenAI ChatCompletion response to match the interface
+    BaseAgent's loop expects.
+
+    Maps:
+        .stop_reason   "stop" -> "end_turn", "tool_calls" -> "tool_use"
+        .content       list of TextBlock / ToolUseBlock
+    """
+
+    def __init__(self, response: Any):
+        self._raw    = response
+        choice       = response.choices[0]
+        self.stop_reason = self._map_stop_reason(choice.finish_reason)
+        self.content     = self._map_content(choice.message)
+
+    @staticmethod
+    def _map_stop_reason(finish_reason: str) -> str:
+        return {
+            "stop":           "end_turn",
+            "tool_calls":     "tool_use",
+            "length":         "max_tokens",
+            "content_filter": "end_turn",
+        }.get(finish_reason or "stop", "end_turn")
+
+    @staticmethod
+    def _map_content(message: Any) -> list:
+        blocks = []
+
+        if message.content:
+            blocks.append(TextBlock(message.content))
+
+        if message.tool_calls:
+            for tc in message.tool_calls:
+                try:
+                    parsed_input = json.loads(tc.function.arguments or "{}")
+                except json.JSONDecodeError:
+                    parsed_input = {}
+                blocks.append(ToolUseBlock(
+                    id=tc.id,
+                    name=tc.function.name,
+                    input=parsed_input,
+                ))
+
+        return blocks
+
+
+# ---------------------------------------------------------------------------
+# AgentResult
+# ---------------------------------------------------------------------------
+
+@dataclass
+class AgentResult:
+    """
+    Returned by every agent's run() method.
+    The orchestrator reads these to decide what to do next.
+    """
+    agent:      str
+    output:     str
+    success:    bool
+    error:      Optional[str] = None
+    iterations: int = 0
+    provider:   str = ""   # which provider was actually used
+
+    def __bool__(self) -> bool:
+        return self.success
+
+
+# ---------------------------------------------------------------------------
+# BaseAgent
+# ---------------------------------------------------------------------------
 
 class BaseAgent(ABC):
     """
@@ -56,31 +158,27 @@ class BaseAgent(ABC):
         execute_tool() — tool dispatch and implementation
 
     The run() method is final — subclasses do not override it.
-    The agentic loop, memory logging, and error handling live here.
     """
 
-    # Name used in logs, memory, and reports.
-    # Subclasses should override this as a class attribute.
     name: str = "base_agent"
 
-    def __init__(self, config: DevAgentConfig, memory: MemoryStore):
-        self.config  = config
-        self.memory  = memory
-        self.client  = anthropic.Anthropic()
-        self._model  = config.model
-        self._max_iter = config.max_iterations
+    def __init__(self, config, memory):
+        self.config          = config
+        self.memory          = memory
+        self._model          = config.model
+        self._max_iter       = config.max_iterations
+        self._provider_used  = ""
 
     # ------------------------------------------------------------------
-    # Interface — subclasses implement these
+    # Interface — subclasses implement these three
     # ------------------------------------------------------------------
 
     @property
     @abstractmethod
     def system_prompt(self) -> str:
         """
-        The agent's persona, instructions, and constraints.
-        This is prepended to the .ai/ context automatically in run().
-        Keep it focused — the project context comes from config.
+        Agent persona and instructions.
+        Project context from .ai/ is appended automatically in run().
         """
         ...
 
@@ -88,8 +186,9 @@ class BaseAgent(ABC):
     @abstractmethod
     def tools(self) -> list[dict[str, Any]]:
         """
-        Tool definitions in Anthropic's tool format.
-        Each dict has: name, description, input_schema.
+        Tool definitions in Anthropic format:
+            [{"name": "...", "description": "...", "input_schema": {...}}]
+        Converted to OpenAI format automatically before each API call.
         """
         ...
 
@@ -97,14 +196,12 @@ class BaseAgent(ABC):
     def execute_tool(self, tool_name: str, tool_input: dict) -> dict:
         """
         Dispatch a tool call and return the result as a dict.
-
-        Raise ToolError for expected failures (file not found, API error).
-        Let unexpected exceptions propagate — the loop will catch them.
+        Raise ToolError for expected failures.
         """
         ...
 
     # ------------------------------------------------------------------
-    # run() — the agentic loop, final
+    # run() — the agentic loop
     # ------------------------------------------------------------------
 
     def run(self, task: str, extra_context: str = "") -> AgentResult:
@@ -114,17 +211,9 @@ class BaseAgent(ABC):
         Args:
             task:          the user's request or instruction
             extra_context: optional additional context (e.g. a PR diff)
-                           appended to the system prompt
-
-        Returns:
-            AgentResult with the final output and metadata
         """
         self.memory.start_agent(self.name)
 
-        # Build the full system prompt:
-        # 1. Agent persona
-        # 2. Project context from .ai/ (selective per agent)
-        # 3. Any extra context passed by the orchestrator
         project_context = self.config.build_agent_context(self.name)
         full_system = _join_sections([
             self.system_prompt,
@@ -132,41 +221,42 @@ class BaseAgent(ABC):
             extra_context if extra_context else None,
         ])
 
-        messages: list[dict] = [
-            {"role": "user", "content": task}
-        ]
+        messages: list[dict] = [{"role": "user", "content": task}]
 
-        output   = ""
-        error    = None
-        stopped  = False
+        output  = ""
+        error   = None
+        stopped = False
 
         try:
             for iteration in range(1, self._max_iter + 1):
                 self.memory.increment_iterations(self.name)
 
                 response = self._call_api(full_system, messages)
-                messages.append({"role": "assistant", "content": response.content})
+
+                # Append assistant turn to history
+                assistant_content = self._content_to_openai_message(response.content)
+                messages.append({"role": "assistant", **assistant_content})
 
                 if response.stop_reason == "end_turn":
-                    # Agent finished — extract the final text response
-                    output = _extract_text(response.content)
+                    output  = _extract_text(response.content)
                     stopped = True
                     break
 
                 if response.stop_reason != "tool_use":
-                    # Unexpected stop reason — treat as done
-                    output = _extract_text(response.content)
+                    output  = _extract_text(response.content)
                     stopped = True
                     break
 
-                # Execute all tool calls in this turn
+                # Execute tool calls and append results
                 tool_results = self._execute_tool_calls(response.content)
-                messages.append({"role": "user", "content": tool_results})
+                for result in tool_results:
+                    messages.append(result)
 
             if not stopped:
-                # Hit max iterations — extract whatever the agent last said
-                output = _extract_text(messages[-2].get("content", []))
-                error  = f"Reached max iterations ({self._max_iter})"
+                output = _extract_text(
+                    [TextBlock(messages[-2].get("content", ""))]
+                )
+                error = f"Reached max iterations ({self._max_iter})"
 
         except AgentError as e:
             error = str(e)
@@ -177,10 +267,12 @@ class BaseAgent(ABC):
                 success=False,
                 error=error,
                 iterations=self.memory._agent_runs[self.name].iterations,
+                provider=self._provider_used,
             )
 
         except Exception as e:
             error = f"Unexpected error: {type(e).__name__}: {e}"
+            logger.exception(f"[{self.name}] Unexpected error")
             self.memory.fail_agent(self.name, error)
             return AgentResult(
                 agent=self.name,
@@ -188,76 +280,21 @@ class BaseAgent(ABC):
                 success=False,
                 error=error,
                 iterations=self.memory._agent_runs[self.name].iterations,
+                provider=self._provider_used,
             )
 
         self.memory.finish_agent(self.name)
-
         return AgentResult(
             agent=self.name,
             output=output,
             success=error is None,
             error=error,
             iterations=self.memory._agent_runs[self.name].iterations,
+            provider=self._provider_used,
         )
 
     # ------------------------------------------------------------------
-    # Internal — tool execution
-    # ------------------------------------------------------------------
-
-    def _execute_tool_calls(
-        self, content: list
-    ) -> list[dict]:
-        """
-        Execute all tool_use blocks in a response turn.
-        Logs each call to memory.
-        Returns a list of tool_result blocks for the next turn.
-        """
-        results = []
-
-        for block in content:
-            if block.type != "tool_use":
-                continue
-
-            tool_name  = block.name
-            tool_input = block.input
-            start_time = time.time()
-            result_content: dict
-            exec_error: Optional[str] = None
-
-            try:
-                result_content = self.execute_tool(tool_name, tool_input)
-            except ToolError as e:
-                # Expected tool failure — return error to agent so it can recover
-                exec_error     = str(e)
-                result_content = {"error": exec_error}
-            except Exception as e:
-                # Unexpected — log it but let the agent try to recover
-                exec_error     = f"{type(e).__name__}: {e}"
-                result_content = {"error": exec_error}
-
-            duration_ms = int((time.time() - start_time) * 1000)
-
-            # Log to memory
-            self.memory.log_tool_call(
-                agent=self.name,
-                tool=tool_name,
-                inputs=tool_input,
-                result=result_content,
-                duration_ms=duration_ms,
-                error=exec_error,
-            )
-
-            results.append({
-                "type":        "tool_result",
-                "tool_use_id": block.id,
-                "content":     _serialise(result_content),
-                **({"is_error": True} if exec_error else {}),
-            })
-
-        return results
-
-    # ------------------------------------------------------------------
-    # Internal — API call with retry
+    # Provider routing — NIM primary, Gemini fallback
     # ------------------------------------------------------------------
 
     def _call_api(
@@ -265,99 +302,274 @@ class BaseAgent(ABC):
         system: str,
         messages: list[dict],
         max_tokens: int = 4096,
-    ) -> Any:
+    ) -> OpenAIResponseAdapter:
         """
-        Call the Anthropic Messages API.
-        Retries on 529 (overloaded) and 529 (rate limit) with backoff.
+        Primary:  NVIDIA NIM  — requires NVIDIA_API_KEY
+        Fallback: Gemini 2.5 Flash — requires GEMINI_API_KEY (free tier)
+
+        Falls back automatically on connection error, 5xx, or rate limit.
+        Raises AgentError if both providers fail.
         """
+        full_messages = [{"role": "system", "content": system}] + messages
+
+        # --- Primary: NVIDIA NIM ---
+        nvidia_key = os.environ.get("NVIDIA_API_KEY", "").strip()
+        if nvidia_key:
+            try:
+                result = self._call_openai_compatible(
+                    base_url="https://integrate.api.nvidia.com/v1",
+                    api_key=nvidia_key,
+                    model=self._model,
+                    messages=full_messages,
+                    max_tokens=max_tokens,
+                )
+                self._provider_used = f"nvidia-nim/{self._model}"
+                logger.debug(f"[{self.name}] NVIDIA NIM — {self._model}")
+                return result
+
+            except AgentError as e:
+                logger.warning(
+                    f"[{self.name}] NVIDIA NIM failed: {e} — falling back to Gemini"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"[{self.name}] NVIDIA NIM error ({type(e).__name__}: {e}) "
+                    f"— falling back to Gemini"
+                )
+        else:
+            logger.debug(
+                f"[{self.name}] NVIDIA_API_KEY not set — using Gemini directly"
+            )
+
+        # --- Fallback: Gemini free tier ---
+        gemini_key = os.environ.get("GEMINI_API_KEY", "").strip()
+        if not gemini_key:
+            raise AgentError(
+                "Both NVIDIA_API_KEY and GEMINI_API_KEY are missing.\n"
+                "Set at least one in your .env file.\n"
+                "Get a free Gemini key at: aistudio.google.com"
+            )
+
+        fallback_model = getattr(self.config, "fallback_model", "gemini-2.5-flash")
+
+        try:
+            result = self._call_openai_compatible(
+                base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+                api_key=gemini_key,
+                model=fallback_model,
+                messages=full_messages,
+                max_tokens=max_tokens,
+            )
+            self._provider_used = f"gemini/{fallback_model}"
+            logger.info(f"[{self.name}] Gemini fallback — {fallback_model}")
+            return result
+
+        except AgentError as e:
+            raise AgentError(
+                f"Both providers failed.\n"
+                f"NVIDIA NIM: see warning above.\n"
+                f"Gemini ({fallback_model}): {e}"
+            ) from e
+
+    def _call_openai_compatible(
+        self,
+        base_url: str,
+        api_key: str,
+        model: str,
+        messages: list[dict],
+        max_tokens: int,
+    ) -> OpenAIResponseAdapter:
+        """
+        OpenAI-compatible call — works for NIM, Gemini, and Ollama.
+
+        Handles:
+            Tool definitions (Anthropic → OpenAI format)
+            Rate limit retries with exponential backoff
+            Transient 5xx retries
+        """
+        from openai import OpenAI, RateLimitError, APIStatusError, APIConnectionError
+
+        client       = OpenAI(base_url=base_url, api_key=api_key)
+        openai_tools = self._to_openai_tools(self.tools) if self.tools else None
+
+        kwargs: dict[str, Any] = dict(
+            model=model,
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=0.2,
+        )
+        if openai_tools:
+            kwargs["tools"]       = openai_tools
+            kwargs["tool_choice"] = "auto"
+
         for attempt in range(3):
             try:
-                return self.client.messages.create(
-                    model=self._model,
-                    max_tokens=max_tokens,
-                    system=system,
-                    tools=self.tools if self.tools else anthropic.NOT_GIVEN,
-                    messages=messages,
-                )
-            except anthropic.RateLimitError:
+                response = client.chat.completions.create(**kwargs)
+                return OpenAIResponseAdapter(response)
+
+            except RateLimitError as e:
                 if attempt < 2:
-                    time.sleep(2 ** attempt * 5)   # 5s, 10s
+                    wait = 2 ** attempt * 5   # 5s, 10s
+                    logger.warning(
+                        f"Rate limited — waiting {wait}s (attempt {attempt + 1}/3)"
+                    )
+                    time.sleep(wait)
                     continue
-                raise
-            except anthropic.APIStatusError as e:
-                if e.status_code in (529, 503) and attempt < 2:
-                    time.sleep(2 ** attempt * 3)   # 3s, 6s
+                raise AgentError(
+                    f"Rate limit exceeded after 3 attempts on {base_url}"
+                ) from e
+
+            except APIConnectionError as e:
+                # Unreachable — fail fast so fallback can kick in
+                raise AgentError(
+                    f"Cannot connect to {base_url}: {e}"
+                ) from e
+
+            except APIStatusError as e:
+                if e.status_code in (500, 502, 503, 529) and attempt < 2:
+                    wait = 2 ** attempt * 3   # 3s, 6s
+                    logger.warning(
+                        f"Server error {e.status_code} — retrying in {wait}s"
+                    )
+                    time.sleep(wait)
                     continue
-                raise
+                raise AgentError(
+                    f"API error {e.status_code} from {base_url}: {e.message}"
+                ) from e
 
+        raise AgentError(f"API call to {base_url} failed after 3 attempts")
 
-# ---------------------------------------------------------------------------
-# AgentResult
-# ---------------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # Tool execution
+    # ------------------------------------------------------------------
 
-from dataclasses import dataclass
+    def _execute_tool_calls(self, content: list) -> list[dict]:
+        """
+        Execute all ToolUseBlock items in a response turn.
+        Logs each call to memory.
+        Returns tool result messages for the next turn.
+        """
+        results = []
 
+        for block in content:
+            if not isinstance(block, ToolUseBlock):
+                continue
 
-@dataclass
-class AgentResult:
-    """
-    Returned by every agent's run() method.
-    The orchestrator reads these to decide what to do next.
-    """
-    agent:      str
-    output:     str         # the agent's final text response
-    success:    bool
-    error:      Optional[str] = None
-    iterations: int = 0
+            start_time            = time.time()
+            exec_error: Optional[str] = None
+            result_content: dict
 
-    def __bool__(self) -> bool:
-        return self.success
+            try:
+                result_content = self.execute_tool(block.name, block.input)
 
+            except ToolError as e:
+                exec_error     = str(e)
+                result_content = {"error": exec_error}
+                logger.debug(f"[{self.name}] ToolError in {block.name}: {e}")
 
-# ---------------------------------------------------------------------------
-# ToolError — agents raise this for expected tool failures
-# ---------------------------------------------------------------------------
+            except Exception as e:
+                exec_error     = f"{type(e).__name__}: {e}"
+                result_content = {"error": exec_error}
+                logger.warning(
+                    f"[{self.name}] Unexpected error in tool {block.name}: {e}"
+                )
 
-class ToolError(Exception):
-    """
-    Raise this inside execute_tool() when a tool fails expectedly.
-    The error message is returned to the agent so it can recover.
+            duration_ms = int((time.time() - start_time) * 1000)
 
-    Examples:
-        File not found
-        API call failed with 404
-        Invalid input format
+            self.memory.log_tool_call(
+                agent=self.name,
+                tool=block.name,
+                inputs=block.input,
+                result=result_content,
+                duration_ms=duration_ms,
+                error=exec_error,
+            )
 
-    Do NOT raise this for programming errors — let those propagate.
-    """
-    pass
+            # OpenAI tool result format
+            results.append({
+                "role":         "tool",
+                "tool_call_id": block.id,
+                "name":         block.name,
+                "content":      _serialise(result_content),
+            })
+
+        return results
+
+    # ------------------------------------------------------------------
+    # Format helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _to_openai_tools(anthropic_tools: list[dict]) -> list[dict]:
+        """
+        Anthropic tool format → OpenAI tool format.
+
+        Anthropic: {"name", "description", "input_schema"}
+        OpenAI:    {"type": "function", "function": {"name", "description", "parameters"}}
+        """
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name":        t["name"],
+                    "description": t.get("description", ""),
+                    "parameters":  t.get("input_schema", {
+                        "type": "object",
+                        "properties": {},
+                    }),
+                },
+            }
+            for t in anthropic_tools
+        ]
+
+    @staticmethod
+    def _content_to_openai_message(content: list) -> dict:
+        """
+        Convert content blocks to an OpenAI assistant message dict
+        so we can append it to the conversation history correctly.
+        """
+        tool_calls  = [b for b in content if isinstance(b, ToolUseBlock)]
+        text_blocks = [b for b in content if isinstance(b, TextBlock)]
+        text        = " ".join(b.text for b in text_blocks).strip()
+
+        if tool_calls:
+            return {
+                "content": text or None,
+                "tool_calls": [
+                    {
+                        "id":   tc.id,
+                        "type": "function",
+                        "function": {
+                            "name":      tc.name,
+                            "arguments": json.dumps(tc.input),
+                        },
+                    }
+                    for tc in tool_calls
+                ],
+            }
+
+        return {"content": text}
 
 
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _extract_text(content) -> str:
-    """Extract text from a response content block list."""
+def _extract_text(content: Any) -> str:
     if isinstance(content, str):
         return content
     if isinstance(content, list):
         return "\n".join(
-            block.text
-            for block in content
-            if hasattr(block, "text")
+            b.text for b in content if isinstance(b, TextBlock)
         ).strip()
     return ""
 
 
 def _join_sections(sections: list[Optional[str]]) -> str:
-    """Join non-None, non-empty sections with a separator."""
     return "\n\n---\n\n".join(s for s in sections if s)
 
 
 def _serialise(value: Any) -> str:
-    """Serialise a tool result to a string for the API."""
-    import json
     if isinstance(value, str):
         return value
     try:

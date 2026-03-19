@@ -1,4 +1,3 @@
-# core/__init__.py
 from core.base_agent import BaseAgent, AgentResult, AgentError, ToolError
 from core.memory import MemoryStore, Finding, Severity
 from core.config import DevAgentConfig, init_project
