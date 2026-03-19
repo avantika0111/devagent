@@ -186,9 +186,11 @@ class BaseAgent(ABC):
     @abstractmethod
     def tools(self) -> list[dict[str, Any]]:
         """
-        Tool definitions in Anthropic format:
+        Tool definitions in simple format:
             [{"name": "...", "description": "...", "input_schema": {...}}]
-        Converted to OpenAI format automatically before each API call.
+        
+        Automatically converted to OpenAI-compatible format before API calls.
+        This keeps agent code clean — no nested "type"/"function" wrapper needed.
         """
         ...
 
@@ -383,7 +385,7 @@ class BaseAgent(ABC):
         OpenAI-compatible call — works for NIM, Gemini, and Ollama.
 
         Handles:
-            Tool definitions (Anthropic → OpenAI format)
+            Tool definitions in OpenAI-compatible format
             Rate limit retries with exponential backoff
             Transient 5xx retries
         """
@@ -500,12 +502,12 @@ class BaseAgent(ABC):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _to_openai_tools(anthropic_tools: list[dict]) -> list[dict]:
+    def _to_openai_tools(tools: list[dict]) -> list[dict]:
         """
-        Anthropic tool format → OpenAI tool format.
+        Convert tool format to OpenAI-compatible format.
 
-        Anthropic: {"name", "description", "input_schema"}
-        OpenAI:    {"type": "function", "function": {"name", "description", "parameters"}}
+        Input:  {"name", "description", "input_schema"}
+        Output: {"type": "function", "function": {"name", "description", "parameters"}}
         """
         return [
             {
@@ -519,7 +521,7 @@ class BaseAgent(ABC):
                     }),
                 },
             }
-            for t in anthropic_tools
+            for t in tools
         ]
 
     @staticmethod

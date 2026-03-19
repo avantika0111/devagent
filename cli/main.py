@@ -87,7 +87,7 @@ def init(
     console.print("[bold]Next steps:[/bold]")
     console.print("  1. Fill in [cyan].ai/instruction.md[/cyan] — describe your project")
     console.print("  2. Fill in [cyan].ai/rules/[/cyan] files — your project's conventions")
-    console.print("  3. Set [cyan]ANTHROPIC_API_KEY[/cyan] and [cyan]GITHUB_TOKEN[/cyan] in .env")
+    console.print("  3. Set [cyan]NVIDIA_API_KEY[/cyan] and [cyan]GEMINI_API_KEY[/cyan] in .env")
     console.print("  4. Run [cyan]devagent status[/cyan] to verify the config\n")
 
 

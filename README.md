@@ -334,10 +334,11 @@ devagent init
 
 Creates the `.ai/` directory with the full folder structure and template files for every rule domain. Fill in the templates — this is the most important step.
 
-### 2. Set your API key
+### 2. Set your API keys
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...
+export NVIDIA_API_KEY=your-nvidia-api-key
+export GEMINI_API_KEY=your-gemini-api-key  # fallback
 ```
 
 ### 3. Run a task
@@ -411,7 +412,11 @@ agents:
     health_check_endpoint: /health
     startup_timeout_seconds: 30
 
-model: claude-opus-4-5
+model:
+  provider: nvidia
+  name: qwen/qwen3.5-122b-a10b
+  fallback_provider: gemini
+  fallback_name: gemini-2.5-flash
 max_iterations_per_agent: 15
 ```
 
@@ -451,7 +456,8 @@ devagent/
 
 ## Tech stack
 
-- **[Anthropic Claude](https://anthropic.com)** — all agent reasoning
+- **[Nvidia API](https://developer.nvidia.com/)** — primary agent reasoning
+- **[Gemini API](https://ai.google.dev/)** — fallback agent reasoning
 - **[PyGithub](https://pygithub.readthedocs.io)** — GitHub operations
 - **[semgrep](https://semgrep.dev)** — security pattern scanning
 - **[pip-audit](https://pypi.org/project/pip-audit/)** — dependency CVE scanning

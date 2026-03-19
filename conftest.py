@@ -30,8 +30,9 @@ def set_test_env(monkeypatch):
     Set required environment variables for every test.
     Tests never need real credentials — mocks handle API calls.
     """
-    monkeypatch.setenv("ANTHROPIC_API_KEY",      "test-anthropic-key")
-    monkeypatch.setenv("GITHUB_TOKEN",           "test-github-token")
+    monkeypatch.setenv("NVIDIA_API_KEY",        "test-nvidia-key")
+    monkeypatch.setenv("GEMINI_API_KEY",        "test-gemini-key")
+    monkeypatch.setenv("GITHUB_TOKEN",          "test-github-token")
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET",  "test-webhook-secret")
 
 
