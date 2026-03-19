@@ -1,0 +1,74 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "devagent"
+version = "0.1.0"
+description = "AI coding assistant — plans before coding, writes tests first, reviews its own output"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+
+dependencies = [
+    "anthropic>=0.25.0",
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.29.0",
+    "pydantic>=2.0.0",
+    "pyyaml>=6.0",
+    "python-dotenv>=1.0.0",
+    "PyGithub>=2.3.0",
+    "typer>=0.12.0",
+    "rich>=13.7.0",
+]
+
+[project.optional-dependencies]
+scanning = [
+    "semgrep>=1.68.0",
+    "pip-audit>=2.7.0",
+    "bandit>=1.7.8",
+]
+testing = [
+    "pytest>=8.1.0",
+    "pytest-asyncio>=0.23.0",
+    "httpx>=0.27.0",
+    "coverage>=7.4.0",
+]
+docker = [
+    "docker>=7.0.0",
+]
+all = [
+    "devagent[scanning,testing,docker]",
+]
+
+[project.scripts]
+devagent = "cli.main:app"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["core*", "agents*", "platform*", "cli*"]
+
+# ---------------------------------------------------------------------------
+# Pytest
+# ---------------------------------------------------------------------------
+
+[tool.pytest.ini_options]
+testpaths       = ["tests"]
+asyncio_mode    = "auto"
+python_files    = ["test_*.py"]
+python_classes  = ["Test*"]
+python_functions = ["test_*"]
+addopts         = "-v --tb=short"
+
+# ---------------------------------------------------------------------------
+# Coverage
+# ---------------------------------------------------------------------------
+
+[tool.coverage.run]
+source  = ["core", "agents", "platform", "cli"]
+omit    = ["tests/*", "**/__init__.py"]
+
+[tool.coverage.report]
+show_missing  = true
+skip_covered  = false
+fail_under    = 80
