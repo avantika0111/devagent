@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import yaml
+from dotenv import load_dotenv
 
 
 # ---------------------------------------------------------------------------
@@ -221,6 +222,9 @@ class DevAgentConfig:
 
     @classmethod
     def load(cls, project_root: str | Path) -> "DevAgentConfig":
+        # Load .env file first so API keys are available to resolve_providers()
+        load_dotenv()
+        
         root   = Path(project_root).resolve()
         ai_dir = root / ".ai"
 

@@ -114,6 +114,7 @@ class BaseAgent(ABC):
         # model, max_tokens, temperature, and tools are constant for the run.
         # Build the dict once. _call_api adds only `messages` per call.
         # We store one template per provider since each may have a different model.
+        # Note: Gemini doesn't support OpenAI's tool_result format, so disable tools.
         self._kwargs_templates: dict[str, dict] = {}
         for p in config.resolved_providers:
             tpl: dict[str, Any] = dict(
@@ -121,7 +122,8 @@ class BaseAgent(ABC):
                 max_tokens=4096,
                 temperature=0.2,
             )
-            if self._tool_defs:
+            # Only enable tools for NVIDIA NIM - Gemini/others don't support OpenAI format
+            if self._tool_defs and p.name == "nvidia":
                 tpl["tools"]       = self._tool_defs
                 tpl["tool_choice"] = "auto"
             self._kwargs_templates[p.name] = tpl
@@ -183,10 +185,30 @@ class BaseAgent(ABC):
 
                 response = self._call_api(messages)
 
-                messages.append({
-                    "role":    "assistant",
-                    "content": _response_to_content(response),
-                })
+                # Construct assistant message - handle tool_calls properly
+                assist_msg: dict = {"role": "assistant"}
+                if response.stop_reason == "tool_use":
+                    # Tool calls - use tool_calls field, not content with tool_use blocks
+                    assist_msg["tool_calls"] = [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.name,
+                                "arguments": json.dumps(tc.input) if isinstance(tc.input, dict) else tc.input
+                            }
+                        }
+                        for tc in response.content
+                        if hasattr(tc, 'type') and tc.type == "tool_use"
+                    ]
+                    if not assist_msg.get("tool_calls"):
+                        # Fallback to content if tool_calls could not be extracted
+                        assist_msg["content"] = _response_to_content(response)
+                else:
+                    # Regular text response
+                    assist_msg["content"] = _response_to_content(response)
+                    
+                messages.append(assist_msg)
 
                 if response.stop_reason == "end_turn":
                     output = _extract_text(response.content)
@@ -197,7 +219,9 @@ class BaseAgent(ABC):
                     break
 
                 tool_results = self._execute_tool_calls(response.content)
-                messages.append({"role": "user", "content": tool_results})
+                # Format tool results as JSON text message (NVIDIA doesn't support tool_result type)
+                results_text = json.dumps(tool_results, indent=2)
+                messages.append({"role": "user", "content": results_text})
 
             else:
                 output = _extract_text(messages[-2].get("content", []))
@@ -260,12 +284,15 @@ class BaseAgent(ABC):
                 error=exec_error,
             )
 
-            results.append({
-                "type":        "tool_result",
+            # Format result as dict for text message
+            result_dict = {
+                "tool": block.name,
                 "tool_use_id": block.id,
-                "content":     _serialise(result_content),
-                **({"is_error": True} if exec_error else {}),
-            })
+                "result": result_content,
+            }
+            if exec_error:
+                result_dict["error"] = exec_error
+            results.append(result_dict)
 
         return results
 
@@ -453,14 +480,17 @@ def _map_message_content(message: Any) -> list:
 
 
 def _response_to_content(response: OpenAIResponseAdapter) -> list[dict]:
+    import json
     parts: list[dict] = []
     for block in response.content:
         if block.type == "text":
             parts.append({"type": "text", "text": block.text})
         elif block.type == "tool_use":
+            # Serialize input as JSON string, not dict
+            input_str = block.input if isinstance(block.input, str) else json.dumps(block.input or {})
             parts.append({
                 "type": "tool_use", "id": block.id,
-                "name": block.name, "input": block.input,
+                "name": block.name, "input": input_str,
             })
     return parts or [{"type": "text", "text": ""}]
 
