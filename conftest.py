@@ -3,16 +3,10 @@ conftest.py
 
 Shared pytest fixtures available to every test file.
 pytest discovers this automatically — no imports needed.
-
-Fixtures defined here:
-    tmp_ai_dir      a real .ai/ directory in a temp folder
-    memory          a fresh MemoryStore per test
-    sample_finding  a pre-built Finding for convenience
 """
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
@@ -21,18 +15,18 @@ from core.memory import Finding, MemoryStore, Severity
 
 
 # ---------------------------------------------------------------------------
-# Environment — set before any import that reads env vars
+# Environment
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(autouse=True)
 def set_test_env(monkeypatch):
     """
     Set required environment variables for every test.
-    Tests never need real credentials — mocks handle API calls.
+    Uses placeholder values — mocks handle actual API calls.
     """
-    monkeypatch.setenv("NVIDIA_API_KEY",        "test-nvidia-key")
-    monkeypatch.setenv("GEMINI_API_KEY",        "test-gemini-key")
-    monkeypatch.setenv("GITHUB_TOKEN",          "test-github-token")
+    monkeypatch.setenv("NVIDIA_API_KEY",         "test-nvidia-key")
+    monkeypatch.setenv("GEMINI_API_KEY",         "test-gemini-key")
+    monkeypatch.setenv("GITHUB_TOKEN",           "test-github-token")
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET",  "test-webhook-secret")
 
 
@@ -69,62 +63,48 @@ def sample_finding() -> Finding:
 def tmp_ai_dir(tmp_path: Path) -> Path:
     """
     Create a fully populated .ai/ directory in a temp folder.
-    Returns the project root (not the .ai/ dir itself).
-
-    Use this whenever a test needs to call DevAgentConfig.load().
+    Returns the project root (parent of .ai/).
+    Use whenever a test needs DevAgentConfig.load().
     """
     ai_dir = tmp_path / ".ai"
     ai_dir.mkdir()
 
-    # instruction.md — always required
     (ai_dir / "instruction.md").write_text(
         "# Test project\n\n"
         "## What this is\nA test project for DevAgent tests.\n\n"
         "## What it must never do\nNothing forbidden in tests.\n"
     )
 
-    # rules/ — one file per domain
     rules = ai_dir / "rules"
     rules.mkdir()
-    (rules / "architecture.md").write_text(
-        "# Architecture\n\nBusiness logic in /services only."
-    )
-    (rules / "git.md").write_text(
-        "# Git\n\nBranch format: feat/{id}-{description}."
-    )
-    (rules / "testing.md").write_text(
-        "# Testing\n\npytest only. Minimum 85% coverage."
-    )
-    (rules / "security.md").write_text(
-        "# Security\n\nNo secrets in code. Use environment variables."
-    )
-    (rules / "docker.md").write_text(
-        "# Docker\n\nMulti-stage builds. Non-root user. Pin base images."
-    )
-    (rules / "ci-cd.md").write_text(
-        "# CI/CD\n\nLint → test → scan → build → deploy. No skipping."
-    )
+    (rules / "architecture.md").write_text("# Architecture\n\nBusiness logic in /services only.")
+    (rules / "git.md").write_text("# Git\n\nBranch format: feat/{id}-{description}.")
+    (rules / "testing.md").write_text("# Testing\n\npytest only. Minimum 85% coverage.")
+    (rules / "security.md").write_text("# Security\n\nNo secrets in code. Use environment variables.")
+    (rules / "docker.md").write_text("# Docker\n\nMulti-stage builds. Non-root user.")
+    (rules / "ci-cd.md").write_text("# CI/CD\n\nLint → test → scan → build → deploy.")
 
-    # languages/
     languages = ai_dir / "languages"
     languages.mkdir()
-    (languages / "python.md").write_text(
-        "# Python\n\nPython 3.11+. Type hints on all signatures."
-    )
+    (languages / "python.md").write_text("# Python\n\nPython 3.11+. Type hints on all signatures.")
 
-    # frameworks/
     frameworks = ai_dir / "frameworks"
     frameworks.mkdir()
-    (frameworks / "fastapi.md").write_text(
-        "# FastAPI\n\nAPIRouter per resource. Dependency injection always."
-    )
+    (frameworks / "fastapi.md").write_text("# FastAPI\n\nAPIRouter per resource. Dependency injection always.")
 
-    # plans/ (empty — tests create plans as needed)
     (ai_dir / "plans").mkdir()
 
-    # devagent.yml
+    # devagent.yml — providers list format
     (ai_dir / "devagent.yml").write_text(
-        "model: claude-opus-4-5\n"
+        "providers:\n"
+        "  - name: nvidia\n"
+        "    base_url: https://integrate.api.nvidia.com/v1\n"
+        "    api_key_env: NVIDIA_API_KEY\n"
+        "    model: qwen/qwen3.5-122b-a10b\n"
+        "  - name: gemini\n"
+        "    base_url: https://generativelanguage.googleapis.com/v1beta/openai/\n"
+        "    api_key_env: GEMINI_API_KEY\n"
+        "    model: gemini-2.5-flash\n"
         "max_iterations_per_agent: 5\n"
         "agents:\n"
         "  plan:\n"

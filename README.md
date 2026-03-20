@@ -16,6 +16,29 @@ You stay in control. DevAgent stays in context.
 
 ---
 
+## Provider chain
+
+DevAgent uses two providers in sequence. No single provider is a hard dependency.
+
+```
+Request
+   ↓
+NVIDIA NIM  (qwen/qwen3.5-122b-a10b)   →  success → done
+   ↓ fails or key missing
+Gemini 2.5 Flash  (free tier)           →  success → done
+   ↓ fails
+AgentError — both providers down, logged clearly
+```
+
+| Provider | Key variable | Where to get it | Cost |
+|---|---|---|---|
+| NVIDIA NIM (primary) | `NVIDIA_API_KEY` | build.nvidia.com → Get API Key | Pay per token |
+| Gemini 2.5 Flash (fallback) | `GEMINI_API_KEY` | aistudio.google.com → Get API Key | Free tier: 10 RPM, 250 req/day |
+
+Both providers use the OpenAI-compatible API format — same client, different `base_url`.
+
+---
+
 ## How it works
 
 ### The `.ai/` directory (you write this once, DevAgent maintains the rest)
@@ -42,7 +65,7 @@ your-project/
         └── react.md
 ```
 
-`instruction.md` is the only file that is always loaded by every agent — it is the project brief. Everything under `rules/` is loaded selectively based on which agent is running.
+`instruction.md` is always loaded by every agent. Everything under `rules/` is loaded selectively.
 
 ### Which agent loads which rules
 
@@ -58,8 +81,6 @@ your-project/
 
 ### The agent cycle
 
-Every task — feature, bugfix, refactor — follows this cycle. No skipping steps.
-
 ```
  User task
      ↓
@@ -68,7 +89,7 @@ Every task — feature, bugfix, refactor — follows this cycle. No skipping ste
      ↓
  Architect agent     validates plan against architecture.md
      ↓
- TDD agent           writes failing tests (reads testing.md)
+ TDD agent           writes failing tests first (reads testing.md)
      ↓
  Implement           writes code to make tests pass
      ↓
@@ -95,7 +116,7 @@ Validates the plan against `architecture.md`. Checks for layer boundary violatio
 Reads `testing.md` to know your test framework, folder conventions, and coverage requirements. Writes failing tests before any implementation exists. Tests are committed first — implementation follows.
 
 ### Security agent
-Reads `security.md` and `architecture.md`. Scans for hardcoded secrets, insecure patterns, OWASP Top 10 issues, and vulnerable dependencies. Project-specific security rules in `security.md` are applied on top of general scanning.
+Reads `security.md` and `architecture.md`. Scans for hardcoded secrets, insecure patterns, OWASP Top 10 issues, and vulnerable dependencies.
 
 ### Review agent
 Loads `architecture.md`, `testing.md`, and `security.md` for a full cross-domain review. Checks implementation against the original plan and all relevant rules. Iterates before surfacing the PR to you.
@@ -332,14 +353,31 @@ cd your-project
 devagent init
 ```
 
-Creates the `.ai/` directory with the full folder structure and template files for every rule domain. Fill in the templates — this is the most important step.
+Creates the `.ai/` directory with template files. Fill them in — this is the most important step.
 
 ### 2. Set your API keys
 
 ```bash
-export NVIDIA_API_KEY=your-nvidia-api-key
-export GEMINI_API_KEY=your-gemini-api-key  # fallback
+cp .env.example .env
 ```
+
+Fill in `.env`:
+
+```env
+# Primary — NVIDIA NIM
+# Get at: build.nvidia.com → Get API Key
+NVIDIA_API_KEY=nvapi-...
+
+# Fallback — Gemini free tier (no credit card needed)
+# Get at: aistudio.google.com → Get API Key
+GEMINI_API_KEY=AIza...
+
+# GitHub
+GITHUB_TOKEN=ghp_...
+GITHUB_WEBHOOK_SECRET=your-random-secret
+```
+
+You only need one provider to start. DevAgent uses Gemini automatically if `NVIDIA_API_KEY` is missing.
 
 ### 3. Run a task
 
@@ -391,33 +429,80 @@ devagent plans
 ```yaml
 # .ai/devagent.yml
 
+# Providers tried in order — first one with a key set wins
+providers:
+  - name: nvidia
+    base_url: https://integrate.api.nvidia.com/v1
+    api_key_env: NVIDIA_API_KEY
+    model: qwen/qwen3.5-122b-a10b
+
+  - name: gemini
+    base_url: https://generativelanguage.googleapis.com/v1beta/openai/
+    api_key_env: GEMINI_API_KEY
+    model: gemini-2.5-flash
+
+  # Add any OpenAI-compatible provider here:
+  # - name: ollama
+  #   base_url: http://localhost:11434/v1
+  #   api_key_env: ""
+  #   model: qwen2.5-coder:14b
+
+max_iterations_per_agent: 15
+
 agents:
   plan:
-    require_approval: true        # always show plan before proceeding
-    save_plans: true              # store all plans in .ai/plans/
+    require_approval: true
+    save_plans: true
 
   tdd:
     run_tests_before_implement: true
     fail_on_no_tests: true
+    framework: pytest           # pytest | jest | unittest
 
   security:
     scan_on: [implement, commit]
     fail_on: [critical, high]
 
   github:
-    pr_template: .ai/pr-template.md    # optional
+    branch_format: "{type}/{id}-{description}"
+    commit_format: "{type}({scope}): {description}"
 
   docker:
     verify_build: true
     health_check_endpoint: /health
     startup_timeout_seconds: 30
+```
 
-model:
-  provider: nvidia
-  name: qwen/qwen3.5-122b-a10b
-  fallback_provider: gemini
-  fallback_name: gemini-2.5-flash
-max_iterations_per_agent: 15
+---
+
+## Docker
+
+```bash
+# Build and run
+docker build -t devagent .
+docker run -p 8080:8080 --env-file .env devagent
+
+# Or with Compose
+docker-compose up
+```
+
+For webhook testing without a public URL:
+
+```bash
+# Windows
+winget install ngrok
+ngrok http 8080
+
+# Mac / Linux
+brew install ngrok
+ngrok http 8080
+
+# Paste the https URL into:
+# GitHub repo → Settings → Webhooks → Add webhook
+#   Payload URL:   https://xxxx.ngrok-free.app/webhook
+#   Content type:  application/json
+#   Secret:        (same as GITHUB_WEBHOOK_SECRET in .env)
+#   Events:        Pull requests
 ```
 
 ---
@@ -428,10 +513,11 @@ max_iterations_per_agent: 15
 devagent/
 │
 ├── core/
-│   ├── base_agent.py         # agentic loop — all agents extend this
+│   ├── base_agent.py         # agentic loop + provider chain (NIM → Gemini)
 │   ├── github_client.py      # GitHub API wrapper
 │   ├── memory.py             # per-task memory and context store
-│   └── config.py             # .ai/ loader — reads rules selectively per agent
+│   ├── config.py             # .ai/ loader — reads rules selectively per agent
+│   └── logging_config.py     # structured logging setup
 │
 ├── agents/
 │   ├── plan_agent.py         # task planning + .ai/plans/ writer
@@ -446,8 +532,9 @@ devagent/
 │   └── main.py               # devagent task / plan / ask / review / scan
 │
 ├── platform/
+│   ├── webhook.py            # FastAPI webhook listener
 │   ├── orchestrator.py       # agent cycle coordinator
-│   └── reporter.py           # output formatter
+│   └── reporter.py           # unified output formatter
 │
 └── tests/
 ```
@@ -456,9 +543,11 @@ devagent/
 
 ## Tech stack
 
-- **[Nvidia API](https://developer.nvidia.com/)** — primary agent reasoning
-- **[Gemini API](https://ai.google.dev/)** — fallback agent reasoning
+- **[NVIDIA NIM](https://build.nvidia.com)** — primary model provider (qwen3.5-122b)
+- **[Google Gemini](https://aistudio.google.com)** — free fallback (gemini-2.5-flash)
+- **[OpenAI Python SDK](https://github.com/openai/openai-python)** — OpenAI-compatible client used for both providers
 - **[PyGithub](https://pygithub.readthedocs.io)** — GitHub operations
+- **[FastAPI](https://fastapi.tiangolo.com)** — webhook listener
 - **[semgrep](https://semgrep.dev)** — security pattern scanning
 - **[pip-audit](https://pypi.org/project/pip-audit/)** — dependency CVE scanning
 - **[coverage.py](https://coverage.readthedocs.io)** — test coverage analysis

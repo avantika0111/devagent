@@ -2,18 +2,12 @@
 core/config.py
 
 Reads and validates the .ai/ directory structure.
-Loads instruction.md and rule files selectively — each agent
-gets only the rules it needs, not the full set.
+Resolves providers once at load time — keys are read from env vars here,
+never inside the agent loop.
 
-Provider config:
-    provider:          nvidia | gemini            (primary)
-    model:             model name for primary provider
-    fallback_provider: gemini                     (fallback, always free tier)
-    fallback_model:    gemini-2.5-flash           (fallback model)
-
-Usage:
-    config = DevAgentConfig.load("/path/to/project")
-    context = config.build_agent_context("tdd_agent")
+The resolved_providers list is the only provider state agents ever read.
+It is pre-filtered (unavailable providers dropped), pre-ordered (config order),
+and immutable after load.
 """
 
 from __future__ import annotations
@@ -27,8 +21,111 @@ import yaml
 
 
 # ---------------------------------------------------------------------------
-# Which rule files each agent loads
-# Agents always get instruction.md + only their relevant rule files.
+# Provider config — resolved at load time, not at call time
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class ProviderConfig:
+    """
+    A fully resolved provider. api_key is the actual value, not the env var name.
+    frozen=True — providers are immutable after config.load().
+    """
+    name:     str
+    base_url: str
+    model:    str
+    api_key:  str   # resolved value — empty string for keyless providers (Ollama)
+
+    def __repr__(self) -> str:
+        masked = f"{self.api_key[:8]}..." if len(self.api_key) > 8 else "***"
+        return f"Provider({self.name}, {self.model}, key={masked if self.api_key else 'none'})"
+
+
+# Known providers — base_url and key env var name by shorthand
+_KNOWN: dict[str, dict[str, str]] = {
+    "nvidia": {
+        "base_url":    "https://integrate.api.nvidia.com/v1",
+        "api_key_env": "NVIDIA_API_KEY",
+        "model":       "qwen/qwen3.5-122b-a10b",
+    },
+    "gemini": {
+        "base_url":    "https://generativelanguage.googleapis.com/v1beta/openai/",
+        "api_key_env": "GEMINI_API_KEY",
+        "model":       "gemini-2.5-flash",
+    },
+    "openai": {
+        "base_url":    "https://api.openai.com/v1",
+        "api_key_env": "OPENAI_API_KEY",
+        "model":       "gpt-4o",
+    },
+    "groq": {
+        "base_url":    "https://api.groq.com/openai/v1",
+        "api_key_env": "GROQ_API_KEY",
+        "model":       "llama-3.3-70b-versatile",
+    },
+    "ollama": {
+        "base_url":    "http://localhost:11434/v1",
+        "api_key_env": "",   # no key needed
+        "model":       "qwen2.5-coder:14b",
+    },
+    "azure": {
+        "base_url":    "",   # must be set explicitly — resource-specific
+        "api_key_env": "AZURE_OPENAI_API_KEY",
+        "model":       "gpt-4o",
+    },
+}
+
+_DEFAULT_PROVIDERS = [
+    {"name": "nvidia", "api_key_env": "NVIDIA_API_KEY",
+     "base_url": _KNOWN["nvidia"]["base_url"], "model": _KNOWN["nvidia"]["model"]},
+    {"name": "gemini", "api_key_env": "GEMINI_API_KEY",
+     "base_url": _KNOWN["gemini"]["base_url"], "model": _KNOWN["gemini"]["model"]},
+]
+
+
+def _resolve_providers(raw: list[dict]) -> list[ProviderConfig]:
+    """
+    Read env vars once. Build the resolved provider list.
+    Providers with a missing required key are silently dropped.
+    Called once at config.load() — never again.
+
+    Each entry in raw can either:
+      - name a known provider shorthand: {"name": "nvidia", "model": "..."}
+      - specify everything explicitly:   {"name": "my-nim", "base_url": "...", ...}
+    """
+    resolved: list[ProviderConfig] = []
+
+    for entry in raw:
+        name    = entry.get("name", "")
+        known   = _KNOWN.get(name, {})
+
+        base_url    = entry.get("base_url")    or known.get("base_url", "")
+        model       = entry.get("model")       or known.get("model", "")
+        api_key_env = entry.get("api_key_env") if "api_key_env" in entry \
+                      else known.get("api_key_env", "")
+
+        # Resolve key from env — single read, stored in the object
+        api_key = os.environ.get(api_key_env, "").strip() if api_key_env else ""
+
+        # Drop provider if key is required but not set
+        if api_key_env and not api_key:
+            continue
+
+        # Drop provider if base_url is missing (misconfigured Azure etc.)
+        if not base_url:
+            continue
+
+        resolved.append(ProviderConfig(
+            name=name,
+            base_url=base_url,
+            model=model,
+            api_key=api_key,
+        ))
+
+    return resolved
+
+
+# ---------------------------------------------------------------------------
+# Agent rule mapping
 # ---------------------------------------------------------------------------
 
 AGENT_RULES_MAP: dict[str, list[str]] = {
@@ -43,7 +140,7 @@ AGENT_RULES_MAP: dict[str, list[str]] = {
 
 
 # ---------------------------------------------------------------------------
-# Sub-configs parsed from .ai/devagent.yml
+# Sub-configs
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -61,8 +158,8 @@ class TDDConfig:
 
 @dataclass
 class SecurityConfig:
-    scan_on: list[str]      = field(default_factory=lambda: ["implement", "commit"])
-    fail_on: list[str]      = field(default_factory=lambda: ["critical", "high"])
+    scan_on: list[str]       = field(default_factory=lambda: ["implement", "commit"])
+    fail_on: list[str]       = field(default_factory=lambda: ["critical", "high"])
     custom_rules: Optional[str] = None
 
 
@@ -96,27 +193,27 @@ class AgentsConfig:
 @dataclass
 class DevAgentConfig:
     """
-    Full parsed configuration for a project's DevAgent setup.
+    Full parsed and resolved configuration for a project.
 
-    Provider fields:
-        provider:          which provider to use primarily (nvidia | gemini)
-        model:             model name for the primary provider
-        fallback_provider: always "gemini" — free tier fallback
-        fallback_model:    gemini model to use when primary fails
+    resolved_providers — the only provider field agents should read.
+        Pre-built at load time. Immutable. Available providers only.
+        Config order is preserved (first = highest priority).
     """
 
-    project_root:      Path
-    ai_dir:            Path
-    instruction:       str
-    rules:             dict[str, str]
-    languages:         dict[str, str]
-    frameworks:        dict[str, str]
-    agents:            AgentsConfig
-    model:             str = "qwen/qwen3.5-122b-a10b"
-    fallback_model:    str = "gemini-2.5-flash"
-    provider:          str = "nvidia"
-    fallback_provider: str = "gemini"
-    max_iterations:    int = 15
+    project_root:       Path
+    ai_dir:             Path
+    instruction:        str
+    rules:              dict[str, str]
+    languages:          dict[str, str]
+    frameworks:         dict[str, str]
+    agents:             AgentsConfig
+    resolved_providers: list[ProviderConfig]
+    max_iterations:     int = 15
+
+    # Convenience: first resolved provider's model (for display / logging)
+    @property
+    def model(self) -> str:
+        return self.resolved_providers[0].model if self.resolved_providers else ""
 
     # ------------------------------------------------------------------
     # Factory
@@ -124,13 +221,6 @@ class DevAgentConfig:
 
     @classmethod
     def load(cls, project_root: str | Path) -> "DevAgentConfig":
-        """
-        Load configuration from a project's .ai/ directory.
-
-        Raises:
-            FileNotFoundError: if .ai/ or instruction.md doesn't exist
-            ValueError:        if devagent.yml is malformed
-        """
         root   = Path(project_root).resolve()
         ai_dir = root / ".ai"
 
@@ -140,12 +230,17 @@ class DevAgentConfig:
                 f"Run 'devagent init' to initialise your project."
             )
 
-        instruction = cls._load_required(ai_dir / "instruction.md")
-        rules       = cls._load_directory(ai_dir / "rules")
-        languages   = cls._load_directory(ai_dir / "languages")
-        frameworks  = cls._load_directory(ai_dir / "frameworks")
-        agents_cfg  = cls._load_agents_config(ai_dir / "devagent.yml")
-        model_cfg   = cls._load_model_config(ai_dir / "devagent.yml")
+        raw          = cls._load_yml(ai_dir / "devagent.yml")
+        instruction  = cls._load_required(ai_dir / "instruction.md")
+        rules        = cls._load_directory(ai_dir / "rules")
+        languages    = cls._load_directory(ai_dir / "languages")
+        frameworks   = cls._load_directory(ai_dir / "frameworks")
+        agents_cfg   = cls._load_agents_config(raw)
+        max_iter     = raw.get("max_iterations_per_agent", 15)
+
+        # Resolve providers once — keys read from env here, never again
+        raw_providers      = raw.get("providers") or _DEFAULT_PROVIDERS
+        resolved_providers = _resolve_providers(raw_providers)
 
         return cls(
             project_root=root,
@@ -155,63 +250,45 @@ class DevAgentConfig:
             languages=languages,
             frameworks=frameworks,
             agents=agents_cfg,
-            model=model_cfg["model"],
-            fallback_model=model_cfg["fallback_model"],
-            provider=model_cfg["provider"],
-            fallback_provider=model_cfg["fallback_provider"],
-            max_iterations=model_cfg["max_iterations"],
+            resolved_providers=resolved_providers,
+            max_iterations=max_iter,
         )
 
     # ------------------------------------------------------------------
-    # Context building — called by each agent before it runs
+    # Context building
     # ------------------------------------------------------------------
 
     def build_agent_context(self, agent_name: str) -> str:
         """
-        Build the full context string for one agent.
-
-        Always includes instruction.md.
-        Adds only the rule files mapped to this agent.
-        Adds all language and framework files (small, always relevant).
-
-        Returns a single string ready to append to the system prompt.
+        Build context string for one agent.
+        instruction.md always included.
+        Only the rule files mapped to this agent are included.
         """
-        sections: list[str] = []
+        sections: list[str] = ["## Project instruction\n\n" + self.instruction]
 
-        # 1. Project instruction — always first, always complete
-        sections.append("## Project instruction\n\n" + self.instruction)
-
-        # 2. Relevant rules only — agent gets what it needs, nothing more
         for filename in AGENT_RULES_MAP.get(agent_name, []):
             if filename in self.rules:
-                label = filename.replace(".md", "").replace("-", " ").title()
-                sections.append(f"## Rules: {label}\n\n{self.rules[filename]}")
+                name = filename.replace(".md", "").replace("-", " ").title()
+                sections.append(f"## Rules: {name}\n\n{self.rules[filename]}")
 
-        # 3. Language conventions
         for lang, content in self.languages.items():
-            label = lang.replace(".md", "").title()
-            sections.append(f"## Language: {label}\n\n{content}")
+            sections.append(f"## Language: {lang}\n\n{content}")
 
-        # 4. Framework conventions
         for fw, content in self.frameworks.items():
-            label = fw.replace(".md", "").title()
-            sections.append(f"## Framework: {label}\n\n{content}")
+            sections.append(f"## Framework: {fw}\n\n{content}")
 
         return "\n\n---\n\n".join(sections)
 
     def get_rule(self, filename: str) -> Optional[str]:
-        """Get a specific rule file by filename, e.g. 'security.md'."""
         return self.rules.get(filename)
 
     def list_plans(self) -> list[Path]:
-        """List all plan files in .ai/plans/, sorted by creation time."""
         plans_dir = self.ai_dir / "plans"
         if not plans_dir.exists():
             return []
         return sorted(plans_dir.glob("PLAN-*.md"), key=lambda p: p.stat().st_mtime)
 
     def next_plan_id(self) -> str:
-        """Generate the next sequential plan ID, e.g. 'PLAN-003'."""
         plans = self.list_plans()
         if not plans:
             return "PLAN-001"
@@ -222,22 +299,14 @@ class DevAgentConfig:
         return f"PLAN-{n:03d}"
 
     def save_plan(self, plan_id: str, content: str) -> Path:
-        """Write a plan file to .ai/plans/."""
         plans_dir = self.ai_dir / "plans"
         plans_dir.mkdir(parents=True, exist_ok=True)
-        plan_path = plans_dir / f"{plan_id}.md"
-        plan_path.write_text(content, encoding="utf-8")
-        return plan_path
-
-    def provider_summary(self) -> str:
-        """Human-readable provider summary for logging and CLI status."""
-        return (
-            f"Primary:  {self.provider} / {self.model}\n"
-            f"Fallback: {self.fallback_provider} / {self.fallback_model}"
-        )
+        path = plans_dir / f"{plan_id}.md"
+        path.write_text(content, encoding="utf-8")
+        return path
 
     # ------------------------------------------------------------------
-    # Internal loaders
+    # Loaders
     # ------------------------------------------------------------------
 
     @staticmethod
@@ -245,17 +314,12 @@ class DevAgentConfig:
         if not path.exists():
             raise FileNotFoundError(
                 f"Required file not found: {path}\n"
-                f"Run 'devagent init' to create the .ai/ template."
+                "Run 'devagent init' to create the .ai/ template."
             )
         return path.read_text(encoding="utf-8").strip()
 
     @staticmethod
     def _load_directory(directory: Path) -> dict[str, str]:
-        """
-        Load all .md files from a directory.
-        Returns dict of filename → content.
-        Returns empty dict if directory doesn't exist.
-        """
         if not directory.exists():
             return {}
         return {
@@ -272,52 +336,43 @@ class DevAgentConfig:
             return yaml.safe_load(f) or {}
 
     @classmethod
-    def _load_agents_config(cls, yml_path: Path) -> AgentsConfig:
-        raw = cls._load_yml(yml_path).get("agents", {})
-        if not raw:
-            return AgentsConfig()
-
+    def _load_agents_config(cls, raw: dict) -> AgentsConfig:
+        a = raw.get("agents", {})
         return AgentsConfig(
             plan=PlanConfig(
-                require_approval=raw.get("plan", {}).get("require_approval", True),
-                save_plans=raw.get("plan", {}).get("save_plans", True),
+                require_approval=a.get("plan", {}).get("require_approval", True),
+                save_plans=a.get("plan", {}).get("save_plans", True),
             ),
             tdd=TDDConfig(
-                run_tests_before_implement=raw.get("tdd", {}).get("run_tests_before_implement", True),
-                fail_on_no_tests=raw.get("tdd", {}).get("fail_on_no_tests", True),
-                framework=raw.get("tdd", {}).get("framework", "pytest"),
+                run_tests_before_implement=a.get("tdd", {}).get(
+                    "run_tests_before_implement", True),
+                fail_on_no_tests=a.get("tdd", {}).get("fail_on_no_tests", True),
+                framework=a.get("tdd", {}).get("framework", "pytest"),
             ),
             security=SecurityConfig(
-                scan_on=raw.get("security", {}).get("scan_on", ["implement", "commit"]),
-                fail_on=raw.get("security", {}).get("fail_on", ["critical", "high"]),
-                custom_rules=raw.get("security", {}).get("custom_rules"),
+                scan_on=a.get("security", {}).get("scan_on", ["implement", "commit"]),
+                fail_on=a.get("security", {}).get("fail_on", ["critical", "high"]),
+                custom_rules=a.get("security", {}).get("custom_rules"),
             ),
             github=GitHubConfig(
-                branch_format=raw.get("github", {}).get("branch_format", "{type}/{id}-{description}"),
-                commit_format=raw.get("github", {}).get("commit_format", "{type}({scope}): {description}"),
-                pr_template=raw.get("github", {}).get("pr_template"),
+                branch_format=a.get("github", {}).get(
+                    "branch_format", "{type}/{id}-{description}"),
+                commit_format=a.get("github", {}).get(
+                    "commit_format", "{type}({scope}): {description}"),
+                pr_template=a.get("github", {}).get("pr_template"),
             ),
             docker=DockerConfig(
-                verify_build=raw.get("docker", {}).get("verify_build", True),
-                health_check_endpoint=raw.get("docker", {}).get("health_check_endpoint", "/health"),
-                startup_timeout_seconds=raw.get("docker", {}).get("startup_timeout_seconds", 30),
+                verify_build=a.get("docker", {}).get("verify_build", True),
+                health_check_endpoint=a.get("docker", {}).get(
+                    "health_check_endpoint", "/health"),
+                startup_timeout_seconds=a.get("docker", {}).get(
+                    "startup_timeout_seconds", 30),
             ),
         )
 
-    @classmethod
-    def _load_model_config(cls, yml_path: Path) -> dict[str, Any]:
-        raw = cls._load_yml(yml_path)
-        return {
-            "provider":          raw.get("provider",          "nvidia"),
-            "model":             raw.get("model",             "qwen/qwen3.5-122b-a10b"),
-            "fallback_provider": raw.get("fallback_provider", "gemini"),
-            "fallback_model":    raw.get("fallback_model",    "gemini-2.5-flash"),
-            "max_iterations":    raw.get("max_iterations_per_agent", 15),
-        }
-
 
 # ---------------------------------------------------------------------------
-# Init helper — creates .ai/ scaffold in a new project
+# Init scaffold
 # ---------------------------------------------------------------------------
 
 TEMPLATES: dict[str, str] = {
@@ -349,7 +404,7 @@ TEMPLATES: dict[str, str] = {
 # Git rules
 
 ## Branches
-<!-- Format, types, which branches are protected? -->
+<!-- Format, types, what branches are protected? -->
 
 ## Commits
 <!-- Format, message style, subject line length. -->
@@ -361,10 +416,10 @@ TEMPLATES: dict[str, str] = {
 # Testing rules
 
 ## Framework
-<!-- pytest / jest / unittest — which one and version? -->
+<!-- pytest / jest / unittest -->
 
 ## Requirements
-<!-- Coverage threshold, which functions must be tested, integration test rules. -->
+<!-- Coverage threshold, which functions must be tested. -->
 
 ## Structure
 <!-- Test file naming, folder layout, fixture conventions. -->
@@ -373,7 +428,7 @@ TEMPLATES: dict[str, str] = {
 # Security rules
 
 ## Secrets
-<!-- How are secrets managed? What is forbidden in code? -->
+<!-- How are secrets managed? What is forbidden? -->
 
 ## Input handling
 <!-- Validation requirements, PII rules, logging constraints. -->
@@ -385,7 +440,7 @@ TEMPLATES: dict[str, str] = {
 # Docker rules
 
 ## Dockerfile
-<!-- Base image policy, multi-stage build requirements, non-root user. -->
+<!-- Base image policy, multi-stage builds, non-root user. -->
 
 ## Health checks
 <!-- Required endpoint, startup timeout. -->
@@ -407,15 +462,37 @@ TEMPLATES: dict[str, str] = {
 """,
     "devagent.yml": """\
 # DevAgent configuration
+#
+# Providers are tried in order — first one with a key set wins.
+# Add, remove, or reorder providers based on what you have.
+# All providers use the OpenAI-compatible API — same client, different base_url.
 
-# Provider chain
-# Primary:  NVIDIA NIM — build.nvidia.com → Get API Key → set NVIDIA_API_KEY in .env
-# Fallback: Google Gemini free tier — aistudio.google.com → Get API Key → set GEMINI_API_KEY in .env
-provider: nvidia
-model: qwen/qwen3.5-122b-a10b
+providers:
+  - name: nvidia
+    base_url: https://integrate.api.nvidia.com/v1
+    api_key_env: NVIDIA_API_KEY
+    model: qwen/qwen3.5-122b-a10b
 
-fallback_provider: gemini
-fallback_model: gemini-2.5-flash
+  - name: gemini
+    base_url: https://generativelanguage.googleapis.com/v1beta/openai/
+    api_key_env: GEMINI_API_KEY
+    model: gemini-2.5-flash
+
+  # Uncomment to add more providers:
+  # - name: openai
+  #   base_url: https://api.openai.com/v1
+  #   api_key_env: OPENAI_API_KEY
+  #   model: gpt-4o
+
+  # - name: groq
+  #   base_url: https://api.groq.com/openai/v1
+  #   api_key_env: GROQ_API_KEY
+  #   model: llama-3.3-70b-versatile
+
+  # - name: ollama
+  #   base_url: http://localhost:11434/v1
+  #   api_key_env: ""
+  #   model: qwen2.5-coder:14b
 
 max_iterations_per_agent: 15
 
@@ -423,20 +500,16 @@ agents:
   plan:
     require_approval: true
     save_plans: true
-
   tdd:
     run_tests_before_implement: true
     fail_on_no_tests: true
     framework: pytest
-
   security:
     scan_on: [implement, commit]
     fail_on: [critical, high]
-
   github:
     branch_format: "{type}/{id}-{description}"
     commit_format: "{type}({scope}): {description}"
-
   docker:
     verify_build: true
     health_check_endpoint: /health
@@ -447,12 +520,11 @@ agents:
 
 def init_project(project_root: str | Path) -> list[Path]:
     """
-    Create the .ai/ scaffold in a project directory.
-    Skips files that already exist — safe to re-run.
+    Create the .ai/ scaffold. Skips existing files — safe to re-run.
     Returns list of files created.
     """
-    root   = Path(project_root).resolve()
-    ai_dir = root / ".ai"
+    root    = Path(project_root).resolve()
+    ai_dir  = root / ".ai"
     created: list[Path] = []
 
     for relative_path, content in TEMPLATES.items():

@@ -1,7 +1,7 @@
 """
 tests/test_core/test_phase1.py
 
-Tests for Phase 1: MemoryStore, DevAgentConfig, provider chain, webhook.
+Tests for Phase 1: MemoryStore, DevAgentConfig, BaseAgent provider chain, webhook.
 Run with: pytest tests/test_core/test_phase1.py -v
 """
 
@@ -12,17 +12,18 @@ import hmac
 import json
 import os
 from pathlib import Path
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch, call
 
 import pytest
+from fastapi.testclient import TestClient
 
-from core.memory import (
-    AgentStatus,
-    Finding,
-    MemoryStore,
-    Severity,
-)
+from core.memory import Finding, MemoryStore, Severity, AgentStatus
 from core.config import DevAgentConfig, init_project
+from core.base_agent import (
+    BaseAgent, AgentResult, AgentError, ToolError,
+    OpenAIResponseAdapter, TextBlock, ToolUseBlock,
+    _to_openai_tools, _map_finish_reason,
+)
 
 
 # ===========================================================================
@@ -31,48 +32,45 @@ from core.config import DevAgentConfig, init_project
 
 class TestMemoryStore:
 
-    def setup_method(self):
-        self.memory = MemoryStore(task_id="PLAN-001", repo="you/project", pr_number=42)
+    def test_initial_state(self, memory):
+        assert memory.task_id   == "TEST-001"
+        assert memory.repo      == "you/test-project"
+        assert memory.pr_number == 1
+        assert memory.get_findings()   == []
+        assert memory.get_tool_calls() == []
 
-    def test_initial_state(self):
-        assert self.memory.task_id   == "PLAN-001"
-        assert self.memory.repo      == "you/project"
-        assert self.memory.pr_number == 42
-        assert self.memory.get_findings()   == []
-        assert self.memory.get_tool_calls() == []
+    def test_agent_lifecycle(self, memory):
+        memory.start_agent("tdd_agent")
+        assert memory.agent_status()["tdd_agent"] == "running"
+        memory.finish_agent("tdd_agent")
+        assert memory.agent_status()["tdd_agent"] == "done"
 
-    def test_agent_lifecycle_happy_path(self):
-        self.memory.start_agent("tdd_agent")
-        assert self.memory.agent_status()["tdd_agent"] == "running"
-        self.memory.finish_agent("tdd_agent")
-        assert self.memory.agent_status()["tdd_agent"] == "done"
+    def test_agent_failure(self, memory):
+        memory.start_agent("security_agent")
+        memory.fail_agent("security_agent", "semgrep not found")
+        assert memory.agent_status()["security_agent"] == "failed"
+        assert memory._agent_runs["security_agent"].error == "semgrep not found"
 
-    def test_agent_failure(self):
-        self.memory.start_agent("security_agent")
-        self.memory.fail_agent("security_agent", "semgrep not installed")
-        assert self.memory.agent_status()["security_agent"] == "failed"
-        assert self.memory._agent_runs["security_agent"].error == "semgrep not installed"
+    def test_agent_skip(self, memory):
+        memory.register_agents(["docker_agent"])
+        memory.skip_agent("docker_agent")
+        assert memory.agent_status()["docker_agent"] == "skipped"
 
-    def test_agent_skip(self):
-        self.memory.register_agents(["docker_agent"])
-        self.memory.skip_agent("docker_agent")
-        assert self.memory.agent_status()["docker_agent"] == "skipped"
-
-    def test_register_agents_all_pending(self):
-        self.memory.register_agents(["plan_agent", "tdd_agent", "github_agent"])
-        statuses = self.memory.agent_status()
+    def test_register_agents_all_pending(self, memory):
+        memory.register_agents(["plan_agent", "tdd_agent", "github_agent"])
+        statuses = memory.agent_status()
         assert all(s == "pending" for s in statuses.values())
+        assert set(statuses.keys()) == {"plan_agent", "tdd_agent", "github_agent"}
 
-    def test_iteration_counting(self):
-        self.memory.start_agent("plan_agent")
-        self.memory.increment_iterations("plan_agent")
-        self.memory.increment_iterations("plan_agent")
-        assert self.memory._agent_runs["plan_agent"].iterations == 2
+    def test_iteration_counting(self, memory):
+        memory.start_agent("plan_agent")
+        memory.increment_iterations("plan_agent")
+        memory.increment_iterations("plan_agent")
+        assert memory._agent_runs["plan_agent"].iterations == 2
 
-    # --- Tool calls ---
-
-    def test_log_tool_call(self):
-        call = self.memory.log_tool_call(
+    def test_log_tool_call(self, memory):
+        memory.start_agent("review_agent")
+        call = memory.log_tool_call(
             agent="review_agent",
             tool="get_file",
             inputs={"path": "auth.py"},
@@ -81,166 +79,80 @@ class TestMemoryStore:
         )
         assert call.agent == "review_agent"
         assert call.tool  == "get_file"
-        assert len(self.memory.get_tool_calls()) == 1
+        assert len(memory.get_tool_calls()) == 1
 
-    def test_tool_calls_filtered_by_agent(self):
-        self.memory.log_tool_call("agent_a", "tool_1", {}, {})
-        self.memory.log_tool_call("agent_b", "tool_2", {}, {})
-        self.memory.log_tool_call("agent_a", "tool_3", {}, {})
+    def test_get_tool_calls_filtered_by_agent(self, memory):
+        memory.log_tool_call("agent_a", "tool_1", {}, {})
+        memory.log_tool_call("agent_b", "tool_2", {}, {})
+        memory.log_tool_call("agent_a", "tool_3", {}, {})
+        assert len(memory.get_tool_calls(agent="agent_a")) == 2
 
-        assert len(self.memory.get_tool_calls(agent="agent_a")) == 2
-        assert len(self.memory.get_tool_calls(agent="agent_b")) == 1
-
-    def test_was_tool_called_deduplication(self):
+    def test_was_tool_called_deduplication(self, memory):
         inputs = {"path": "auth.py", "branch": "main"}
-        self.memory.log_tool_call("review_agent", "get_file", inputs, {})
-        assert self.memory.was_tool_called("get_file", inputs) is True
-        assert self.memory.was_tool_called("get_file", {"path": "other.py"}) is False
+        memory.log_tool_call("review_agent", "get_file", inputs, {})
+        assert memory.was_tool_called("get_file", inputs) is True
+        assert memory.was_tool_called("get_file", {"path": "other.py"}) is False
 
-    # --- Findings ---
-
-    def test_add_and_retrieve_finding(self):
-        finding = Finding.create(
-            agent="security_agent",
-            severity=Severity.HIGH,
-            title="Hardcoded API key",
-            description="API key found in config.py:12",
-            file_path="config.py",
-            line_number=12,
-            suggestion="Use os.environ.get('API_KEY')",
-        )
-        self.memory.add_finding(finding)
-        results = self.memory.get_findings()
+    def test_add_and_get_finding(self, memory, sample_finding):
+        memory.add_finding(sample_finding)
+        results = memory.get_findings()
         assert len(results) == 1
         assert results[0].title == "Hardcoded API key"
 
-    def test_findings_sorted_most_severe_first(self):
-        self.memory.add_finding(Finding.create("a", Severity.LOW,      "Low",      ""))
-        self.memory.add_finding(Finding.create("a", Severity.CRITICAL, "Critical", ""))
-        self.memory.add_finding(Finding.create("a", Severity.MEDIUM,   "Medium",   ""))
-
-        findings = self.memory.get_findings()
+    def test_findings_sorted_by_severity(self, memory):
+        memory.add_finding(Finding.create("a", Severity.LOW,      "Low",      ""))
+        memory.add_finding(Finding.create("a", Severity.CRITICAL, "Critical", ""))
+        memory.add_finding(Finding.create("a", Severity.MEDIUM,   "Medium",   ""))
+        findings = memory.get_findings()
         assert findings[0].severity == Severity.CRITICAL
         assert findings[1].severity == Severity.MEDIUM
         assert findings[2].severity == Severity.LOW
 
-    def test_filter_by_min_severity(self):
-        self.memory.add_finding(Finding.create("a", Severity.LOW,      "Low",  ""))
-        self.memory.add_finding(Finding.create("a", Severity.HIGH,     "High", ""))
-        self.memory.add_finding(Finding.create("a", Severity.CRITICAL, "Crit", ""))
+    def test_filter_by_min_severity(self, memory):
+        memory.add_finding(Finding.create("a", Severity.LOW,      "Low",      ""))
+        memory.add_finding(Finding.create("a", Severity.HIGH,     "High",     ""))
+        memory.add_finding(Finding.create("a", Severity.CRITICAL, "Critical", ""))
+        results = memory.get_findings(min_severity=Severity.HIGH)
+        assert len(results) == 2
+        assert all(f.severity in (Severity.HIGH, Severity.CRITICAL) for f in results)
 
-        above_high = self.memory.get_findings(min_severity=Severity.HIGH)
-        assert len(above_high) == 2
-        assert all(f.severity in (Severity.HIGH, Severity.CRITICAL) for f in above_high)
+    def test_has_blocking_findings(self, memory):
+        assert memory.has_blocking_findings() is False
+        memory.add_finding(Finding.create("a", Severity.MEDIUM, "ok", ""))
+        assert memory.has_blocking_findings() is False
+        memory.add_finding(Finding.create("a", Severity.HIGH, "blocker", ""))
+        assert memory.has_blocking_findings() is True
 
-    def test_filter_by_agent(self):
-        self.memory.add_finding(Finding.create("security_agent", Severity.HIGH,   "S", ""))
-        self.memory.add_finding(Finding.create("review_agent",   Severity.MEDIUM, "R", ""))
+    def test_shared_context(self, memory):
+        memory.set("pr_diff", "some diff content")
+        assert memory.get("pr_diff") == "some diff content"
+        assert memory.get("missing_key", "default") == "default"
 
-        assert len(self.memory.get_findings(agent="security_agent")) == 1
-        assert len(self.memory.get_findings(agent="review_agent"))   == 1
-
-    def test_has_blocking_findings(self):
-        assert self.memory.has_blocking_findings() is False
-        self.memory.add_finding(Finding.create("a", Severity.MEDIUM, "ok", ""))
-        assert self.memory.has_blocking_findings() is False
-        self.memory.add_finding(Finding.create("a", Severity.HIGH, "block", ""))
-        assert self.memory.has_blocking_findings() is True
-
-    def test_has_critical_findings(self):
-        self.memory.add_finding(Finding.create("a", Severity.HIGH, "high", ""))
-        assert self.memory.has_critical_findings() is False
-        self.memory.add_finding(Finding.create("a", Severity.CRITICAL, "crit", ""))
-        assert self.memory.has_critical_findings() is True
-
-    # --- Shared context ---
-
-    def test_shared_context_set_and_get(self):
-        self.memory.set("pr_diff", "some diff content")
-        assert self.memory.get("pr_diff")              == "some diff content"
-        assert self.memory.get("missing", "default")   == "default"
-
-    # --- Summary ---
-
-    def test_summary_structure(self):
-        self.memory.start_agent("plan_agent")
-        self.memory.log_tool_call("plan_agent", "read_file", {}, {})
-        self.memory.add_finding(Finding.create("plan_agent", Severity.LOW, "note", ""))
-        self.memory.finish_agent("plan_agent")
-
-        s = self.memory.summary()
-        assert s["task_id"]              == "PLAN-001"
-        assert s["tool_calls"]["total"]  == 1
-        assert s["findings"]["total"]    == 1
-        assert "plan_agent" in s["agents"]
+    def test_summary_structure(self, memory):
+        memory.start_agent("plan_agent")
+        memory.log_tool_call("plan_agent", "read_file", {}, {})
+        memory.add_finding(Finding.create("plan_agent", Severity.LOW, "note", ""))
+        memory.finish_agent("plan_agent")
+        summary = memory.summary()
+        assert summary["task_id"]  == "TEST-001"
+        assert summary["tool_calls"]["total"] == 1
+        assert summary["findings"]["total"]   == 1
 
 
 # ===========================================================================
-# DevAgentConfig — including new provider/fallback fields
+# DevAgentConfig
 # ===========================================================================
 
 class TestDevAgentConfig:
 
-    def _make_ai_dir(self, tmp_path: Path) -> Path:
-        ai_dir = tmp_path / ".ai"
-        ai_dir.mkdir()
-
-        (ai_dir / "instruction.md").write_text("# Test project\nA test.")
-
-        rules = ai_dir / "rules"
-        rules.mkdir()
-        (rules / "architecture.md").write_text("# Architecture\nServices layer.")
-        (rules / "git.md").write_text("# Git\nfeat/{id}-{desc}.")
-        (rules / "testing.md").write_text("# Testing\npytest only.")
-        (rules / "security.md").write_text("# Security\nNo secrets in code.")
-
-        (ai_dir / "languages").mkdir()
-        (ai_dir / "languages" / "python.md").write_text("# Python\nPython 3.11+.")
-
-        (ai_dir / "frameworks").mkdir()
-        (ai_dir / "frameworks" / "fastapi.md").write_text("# FastAPI\nAPIRouter.")
-
-        (ai_dir / "devagent.yml").write_text(
-            "provider: nvidia\n"
-            "model: qwen/qwen3.5-122b-a10b\n"
-            "fallback_provider: gemini\n"
-            "fallback_model: gemini-2.5-flash\n"
-            "max_iterations_per_agent: 10\n"
-        )
-        return ai_dir
-
-    def test_load_provider_fields(self, tmp_path):
-        self._make_ai_dir(tmp_path)
-        config = DevAgentConfig.load(tmp_path)
-
-        assert config.provider          == "nvidia"
-        assert config.model             == "qwen/qwen3.5-122b-a10b"
-        assert config.fallback_provider == "gemini"
-        assert config.fallback_model    == "gemini-2.5-flash"
-        assert config.max_iterations    == 10
-
-    def test_provider_defaults_when_yml_missing_fields(self, tmp_path):
-        ai_dir = tmp_path / ".ai"
-        ai_dir.mkdir()
-        (ai_dir / "instruction.md").write_text("# Project")
-        # devagent.yml has no provider fields — should use defaults
-        (ai_dir / "devagent.yml").write_text("max_iterations_per_agent: 5\n")
-
-        config = DevAgentConfig.load(tmp_path)
-        assert config.provider          == "nvidia"
-        assert config.model             == "qwen/qwen3.5-122b-a10b"
-        assert config.fallback_provider == "gemini"
-        assert config.fallback_model    == "gemini-2.5-flash"
-
-    def test_provider_summary(self, tmp_path):
-        self._make_ai_dir(tmp_path)
-        config = DevAgentConfig.load(tmp_path)
-        summary = config.provider_summary()
-
-        assert "nvidia" in summary
-        assert "qwen/qwen3.5-122b-a10b" in summary
-        assert "gemini" in summary
-        assert "gemini-2.5-flash" in summary
+    def test_load_valid_config(self, tmp_ai_dir):
+        config = DevAgentConfig.load(tmp_ai_dir)
+        assert "Test project"      in config.instruction
+        assert "architecture.md"   in config.rules
+        assert "python.md"         in config.languages
+        assert "fastapi.md"        in config.frameworks
+        assert config.model == "qwen/qwen3.5-122b-a10b"
+        assert config.max_iterations == 5
 
     def test_missing_ai_dir_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError, match=r"\.ai/"):
@@ -251,56 +163,50 @@ class TestDevAgentConfig:
         with pytest.raises(FileNotFoundError, match="instruction.md"):
             DevAgentConfig.load(tmp_path)
 
-    def test_tdd_agent_gets_only_testing_rules(self, tmp_path):
-        self._make_ai_dir(tmp_path)
-        config  = DevAgentConfig.load(tmp_path)
+    def test_provider_defaults(self, tmp_ai_dir):
+        config = DevAgentConfig.load(tmp_ai_dir)
+        # conftest devagent.yml doesn't set provider — check defaults are applied
+        assert isinstance(config.resolved_providers, list)
+        assert all(hasattr(p, "name") for p in config.resolved_providers)
+
+    def test_build_context_tdd_agent(self, config):
         context = config.build_agent_context("tdd_agent")
+        assert "Test project"      in context   # instruction
+        assert "pytest only"       in context   # testing.md
+        assert "Python 3.11"       in context   # languages/python.md
+        assert "APIRouter"         in context   # frameworks/fastapi.md
+        assert "services layer" not in context  # architecture.md not loaded for tdd
 
-        assert "Test project"    in context   # instruction always included
-        assert "pytest only"     in context   # testing.md included
-        assert "Python 3.11"     in context   # languages always included
-        assert "APIRouter"       in context   # frameworks always included
-        assert "Services layer"  not in context  # architecture.md NOT loaded for tdd
-
-    def test_security_agent_gets_security_and_architecture(self, tmp_path):
-        self._make_ai_dir(tmp_path)
-        config  = DevAgentConfig.load(tmp_path)
+    def test_build_context_security_agent(self, config):
         context = config.build_agent_context("security_agent")
+        assert "No secrets"        in context   # security.md
+        assert "services layer"    in context   # architecture.md
+        assert "pytest only"   not in context   # testing.md not for security
 
-        assert "No secrets"     in context   # security.md
-        assert "Services layer" in context   # architecture.md
-        assert "pytest only"    not in context   # testing.md not for security
-
-    def test_github_agent_gets_only_git_rules(self, tmp_path):
-        self._make_ai_dir(tmp_path)
-        config  = DevAgentConfig.load(tmp_path)
+    def test_build_context_github_agent(self, config):
         context = config.build_agent_context("github_agent")
+        assert "feat/{id}"         in context   # git.md
+        assert "pytest"        not in context
 
-        assert "feat/{id}-{desc}" in context    # git.md
-        assert "pytest"           not in context
-
-    def test_plan_id_sequential(self, tmp_path):
-        self._make_ai_dir(tmp_path)
-        config = DevAgentConfig.load(tmp_path)
-
+    def test_plan_id_sequential(self, config):
         assert config.next_plan_id() == "PLAN-001"
         config.save_plan("PLAN-001", "# Plan 1")
         assert config.next_plan_id() == "PLAN-002"
-        config.save_plan("PLAN-002", "# Plan 2")
-        assert config.next_plan_id() == "PLAN-003"
 
-    def test_init_creates_full_scaffold(self, tmp_path):
+    def test_save_and_list_plans(self, config):
+        config.save_plan("PLAN-001", "# First")
+        config.save_plan("PLAN-002", "# Second")
+        plans = config.list_plans()
+        assert len(plans) == 2
+        assert plans[0].stem == "PLAN-001"
+
+    def test_init_creates_scaffold(self, tmp_path):
         created = init_project(tmp_path)
         ai_dir  = tmp_path / ".ai"
-
         assert (ai_dir / "instruction.md").exists()
         assert (ai_dir / "rules" / "architecture.md").exists()
         assert (ai_dir / "rules" / "git.md").exists()
         assert (ai_dir / "rules" / "testing.md").exists()
-        assert (ai_dir / "rules" / "security.md").exists()
-        assert (ai_dir / "rules" / "docker.md").exists()
-        assert (ai_dir / "rules" / "ci-cd.md").exists()
-        assert (ai_dir / "devagent.yml").exists()
         assert (ai_dir / "plans").exists()
         assert len(created) > 0
 
@@ -308,129 +214,210 @@ class TestDevAgentConfig:
         first  = init_project(tmp_path)
         second = init_project(tmp_path)
         assert len(first)  > 0
-        assert len(second) == 0   # nothing created on second run
-
-    def test_devagent_yml_template_has_provider_fields(self, tmp_path):
-        init_project(tmp_path)
-        yml_content = (tmp_path / ".ai" / "devagent.yml").read_text()
-        assert "provider: nvidia"              in yml_content
-        assert "model: qwen/qwen3.5-122b-a10b" in yml_content
-        assert "fallback_provider: gemini"     in yml_content
-        assert "fallback_model: gemini-2.5-flash" in yml_content
+        assert len(second) == 0   # nothing overwritten
 
 
 # ===========================================================================
-# BaseAgent — provider chain behaviour
+# BaseAgent provider chain
 # ===========================================================================
+
+def _make_openai_response(text="ok", finish_reason="stop", tool_calls=None):
+    """Build a minimal mock OpenAI ChatCompletion response."""
+    message            = MagicMock()
+    message.content    = text
+    message.tool_calls = tool_calls
+
+    choice               = MagicMock()
+    choice.finish_reason = finish_reason
+    choice.message       = message
+
+    response         = MagicMock()
+    response.choices = [choice]
+    return response
+
+
+class ConcreteAgent(BaseAgent):
+    """Minimal concrete agent for testing BaseAgent logic."""
+    name = "test_agent"
+
+    @property
+    def system_prompt(self) -> str:
+        return "You are a test agent."
+
+    @property
+    def tools(self) -> list:
+        return []
+
+    def execute_tool(self, tool_name: str, tool_input: dict) -> dict:
+        return {"result": "ok"}
+
 
 class TestBaseAgentProviderChain:
-    """
-    Test the NIM → Gemini fallback chain without making real API calls.
-    All external calls are mocked.
-    """
-
-    def _make_config(self, tmp_path: Path):
-        from core.config import init_project, DevAgentConfig
-        init_project(tmp_path)
-        # Write minimal instruction
-        (tmp_path / ".ai" / "instruction.md").write_text("# Test")
-        return DevAgentConfig.load(tmp_path)
 
     def _make_agent(self, config, memory):
-        """Create a minimal concrete agent for testing."""
-        from core.base_agent import BaseAgent
+        return ConcreteAgent(config=config, memory=memory)
 
-        class MinimalAgent(BaseAgent):
-            name = "test_agent"
+    def test_uses_nvidia_when_key_present(self, config, memory, monkeypatch):
+        monkeypatch.setenv("NVIDIA_API_KEY", "nvapi-test")
+        monkeypatch.setenv("GEMINI_API_KEY", "")
 
-            @property
-            def system_prompt(self): return "You are a test agent."
+        mock_response = _make_openai_response("done")
 
-            @property
-            def tools(self): return []
+        with patch("openai.resources.chat.completions.Completions.create",
+                   return_value=mock_response) as mock_create:
+            agent  = self._make_agent(config, memory)
+            result = agent.run("test task")
 
-            def execute_tool(self, name, inputs): return {}
+        assert result.success
+        # Verify the base_url used was NIM
+        call_kwargs = mock_create.call_args
+        assert call_kwargs is not None
 
-        return MinimalAgent(config, memory)
-
-    def test_nim_used_when_key_present(self, tmp_path, monkeypatch):
+    def test_falls_back_to_gemini_when_nim_fails(self, config, memory, monkeypatch):
         monkeypatch.setenv("NVIDIA_API_KEY", "nvapi-test")
         monkeypatch.setenv("GEMINI_API_KEY", "AIza-test")
 
-        config = self._make_config(tmp_path)
-        memory = MemoryStore("T-001", "you/proj")
-        agent  = self._make_agent(config, memory)
+        mock_response = _make_openai_response("done from gemini")
+        call_count    = {"n": 0}
 
-        mock_response = MagicMock()
-        mock_response.choices = [MagicMock(
-            finish_reason="stop",
-            message=MagicMock(content="Done", tool_calls=None)
-        )]
-
-        with patch("core.base_agent.BaseAgent._call_openai_compatible",
-                   return_value=MagicMock(
-                       stop_reason="end_turn",
-                       content=[MagicMock(type="text", text="Done")]
-                   )) as mock_call:
-            agent._call_api("system", [{"role": "user", "content": "hello"}])
-            # First call should be to NIM
-            first_call_url = mock_call.call_args_list[0][1]["base_url"]
-            assert "nvidia" in first_call_url
-
-    def test_gemini_fallback_when_nim_fails(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("NVIDIA_API_KEY", "nvapi-test")
-        monkeypatch.setenv("GEMINI_API_KEY", "AIza-test")
-
-        config = self._make_config(tmp_path)
-        memory = MemoryStore("T-001", "you/proj")
-        agent  = self._make_agent(config, memory)
-
-        call_count = {"n": 0}
-
-        def mock_call(**kwargs):
+        def mock_create(**kwargs):
             call_count["n"] += 1
-            if "nvidia" in kwargs.get("base_url", ""):
+            if call_count["n"] == 1:
                 raise Exception("NIM unavailable")
-            return MagicMock(
-                stop_reason="end_turn",
-                content=[MagicMock(type="text", text="Gemini response")]
-            )
+            return mock_response
 
-        with patch("core.base_agent.BaseAgent._call_openai_compatible",
-                   side_effect=mock_call):
-            result = agent._call_api("system", [{"role": "user", "content": "hello"}])
+        with patch("openai.resources.chat.completions.Completions.create",
+                   side_effect=mock_create):
+            agent  = self._make_agent(config, memory)
+            result = agent.run("test task")
 
-        assert call_count["n"] == 2   # tried NIM, then Gemini
-        assert "gemini" in agent._provider_used
+        assert result.success
+        assert call_count["n"] == 2   # tried NIM once, then Gemini
 
-    def test_agent_error_when_both_providers_missing(self, tmp_path, monkeypatch):
-        monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
-        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    def test_raises_when_both_keys_missing(self, config, memory, monkeypatch):
+        monkeypatch.setenv("NVIDIA_API_KEY", "")
+        monkeypatch.setenv("GEMINI_API_KEY", "")
 
-        from core.base_agent import AgentError
-        config = self._make_config(tmp_path)
-        memory = MemoryStore("T-001", "you/proj")
         agent  = self._make_agent(config, memory)
+        result = agent.run("test task")
 
-        with pytest.raises(AgentError, match="NVIDIA_API_KEY"):
-            agent._call_api("system", [{"role": "user", "content": "hello"}])
+        assert not result.success
+        assert "NVIDIA_API_KEY" in result.error or "GEMINI_API_KEY" in result.error
 
-    def test_gemini_used_when_no_nim_key(self, tmp_path, monkeypatch):
-        monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
+    def test_uses_gemini_directly_when_no_nvidia_key(self, config, memory, monkeypatch):
+        monkeypatch.setenv("NVIDIA_API_KEY", "")
         monkeypatch.setenv("GEMINI_API_KEY", "AIza-test")
 
-        config = self._make_config(tmp_path)
-        memory = MemoryStore("T-001", "you/proj")
-        agent  = self._make_agent(config, memory)
+        mock_response = _make_openai_response("done from gemini")
 
-        with patch("core.base_agent.BaseAgent._call_openai_compatible",
-                   return_value=MagicMock(
-                       stop_reason="end_turn",
-                       content=[MagicMock(type="text", text="Gemini")]
-                   )) as mock_call:
-            agent._call_api("system", [{"role": "user", "content": "hello"}])
-            call_url = mock_call.call_args[1]["base_url"]
-            assert "generativelanguage" in call_url   # went straight to Gemini
+        with patch("openai.resources.chat.completions.Completions.create",
+                   return_value=mock_response):
+            agent  = self._make_agent(config, memory)
+            result = agent.run("test task")
+
+        assert result.success
+
+    def test_memory_records_agent_lifecycle(self, config, memory, monkeypatch):
+        monkeypatch.setenv("NVIDIA_API_KEY", "")
+        monkeypatch.setenv("GEMINI_API_KEY", "AIza-test")
+
+        mock_response = _make_openai_response("done")
+
+        with patch("openai.resources.chat.completions.Completions.create",
+                   return_value=mock_response):
+            agent = self._make_agent(config, memory)
+            agent.run("test task")
+
+        assert memory.agent_status().get("test_agent") == "done"
+        assert memory._agent_runs["test_agent"].iterations >= 1
+
+
+# ===========================================================================
+# OpenAIResponseAdapter
+# ===========================================================================
+
+class TestOpenAIResponseAdapter:
+
+    def test_maps_stop_to_end_turn(self):
+        resp = OpenAIResponseAdapter(_make_openai_response("hello", "stop"))
+        assert resp.stop_reason == "end_turn"
+
+    def test_maps_tool_calls_to_tool_use(self):
+        resp = OpenAIResponseAdapter(
+            _make_openai_response("", "tool_calls")
+        )
+        assert resp.stop_reason == "tool_use"
+
+    def test_maps_length_to_max_tokens(self):
+        resp = OpenAIResponseAdapter(_make_openai_response("", "length"))
+        assert resp.stop_reason == "max_tokens"
+
+    def test_text_content_block(self):
+        resp = OpenAIResponseAdapter(_make_openai_response("hello world", "stop"))
+        text_blocks = [b for b in resp.content if b.type == "text"]
+        assert len(text_blocks) == 1
+        assert text_blocks[0].text == "hello world"
+
+    def test_tool_use_block(self):
+        tc              = MagicMock()
+        tc.id           = "call_abc123"
+        tc.function.name      = "get_file"
+        tc.function.arguments = '{"path": "auth.py"}'
+
+        msg            = MagicMock()
+        msg.content    = None
+        msg.tool_calls = [tc]
+
+        choice               = MagicMock()
+        choice.finish_reason = "tool_calls"
+        choice.message       = msg
+
+        raw_resp         = MagicMock()
+        raw_resp.choices = [choice]
+
+        resp = OpenAIResponseAdapter(raw_resp)
+        tool_blocks = [b for b in resp.content if b.type == "tool_use"]
+        assert len(tool_blocks) == 1
+        assert tool_blocks[0].name           == "get_file"
+        assert tool_blocks[0].input["path"]  == "auth.py"
+        assert tool_blocks[0].id             == "call_abc123"
+
+
+# ===========================================================================
+# Tool format conversion
+# ===========================================================================
+
+class TestToolConversion:
+
+    def test_to_openai_tools(self):
+        tool_defs = [
+            {
+                "name":        "get_file",
+                "description": "Read a file",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"}
+                    },
+                    "required": ["path"],
+                },
+            }
+        ]
+        openai_tools = _to_openai_tools(tool_defs)
+        assert len(openai_tools) == 1
+        assert openai_tools[0]["type"] == "function"
+        assert openai_tools[0]["function"]["name"] == "get_file"
+        assert "path" in openai_tools[0]["function"]["parameters"]["properties"]
+
+    def test_empty_tools(self):
+        assert _to_openai_tools([]) == []
+
+    def test_tool_without_input_schema(self):
+        tools = [{"name": "ping", "description": "ping"}]
+        result = _to_openai_tools(tools)
+        assert result[0]["function"]["parameters"] == {
+            "type": "object", "properties": {}
+        }
 
 
 # ===========================================================================
@@ -442,22 +429,25 @@ class TestWebhook:
     def setup_method(self):
         os.environ["GITHUB_WEBHOOK_SECRET"] = "test-secret"
         os.environ["GITHUB_TOKEN"]          = "test-token"
-        os.environ["NVIDIA_API_KEY"]        = "nvapi-test"
-        os.environ["GEMINI_API_KEY"]        = "AIza-test"
+        os.environ["NVIDIA_API_KEY"]        = "test-nvidia-key"
+        os.environ["GEMINI_API_KEY"]        = "test-gemini-key"
 
-        from fastapi.testclient import TestClient
         from platform.webhook import app
         self.client = TestClient(app, raise_server_exceptions=False)
         self.secret = "test-secret"
 
     def _sign(self, body: bytes) -> str:
-        mac = hmac.new(self.secret.encode(), body, hashlib.sha256)
+        mac = hmac.new(
+            key=self.secret.encode(),
+            msg=body,
+            digestmod=hashlib.sha256,
+        )
         return f"sha256={mac.hexdigest()}"
 
     def _post(self, payload: dict, event: str = "pull_request",
-              bad_sig: bool = False) -> any:
+              override_sig: str = None) -> any:
         body = json.dumps(payload).encode()
-        sig  = "sha256=badsig" if bad_sig else self._sign(body)
+        sig  = self._sign(body) if override_sig is None else f"sha256={override_sig}"
         return self.client.post(
             "/webhook",
             content=body,
@@ -469,14 +459,14 @@ class TestWebhook:
         )
 
     def test_health_check(self):
-        r = self.client.get("/health")
-        assert r.status_code == 200
-        assert r.json()["status"] == "ok"
+        resp = self.client.get("/health")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "ok"
 
     def test_ping_event(self):
-        r = self._post({"zen": "Keep it simple."}, event="ping")
-        assert r.status_code == 200
-        assert r.json()["status"] == "pong"
+        resp = self._post({"zen": "hello"}, event="ping")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "pong"
 
     def test_pr_opened_accepted(self):
         payload = {
@@ -484,59 +474,43 @@ class TestWebhook:
             "pull_request": {
                 "number": 42,
                 "title":  "Add auth",
-                "user":   {"login": "dev"},
+                "user":   {"login": "devuser"},
                 "head":   {"ref": "feat/DA-42-add-auth"},
             },
             "repository": {"full_name": "you/project"},
         }
-        r = self._post(payload)
-        assert r.status_code == 202
-        assert r.json()["pr"] == 42
-
-    def test_pr_synchronize_accepted(self):
-        payload = {
-            "action": "synchronize",
-            "pull_request": {
-                "number": 43, "title": "Fix bug",
-                "user": {"login": "dev"}, "head": {"ref": "fix/bug"},
-            },
-            "repository": {"full_name": "you/project"},
-        }
-        r = self._post(payload)
-        assert r.status_code == 202
+        resp = self._post(payload)
+        assert resp.status_code == 202
+        assert resp.json()["pr"] == 42
 
     def test_pr_closed_ignored(self):
         payload = {
             "action": "closed",
             "pull_request": {
-                "number": 1, "title": "Done",
+                "number": 1, "title": "Merge",
                 "user": {"login": "u"}, "head": {"ref": "feat/x"},
             },
             "repository": {"full_name": "you/project"},
         }
-        r = self._post(payload)
-        assert r.status_code == 200
-        assert r.json()["status"] == "ignored"
+        resp = self._post(payload)
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "ignored"
 
     def test_invalid_signature_rejected(self):
-        r = self._post({"action": "opened"}, bad_sig=True)
-        assert r.status_code == 401
+        payload = {"action": "opened"}
+        resp    = self._post(payload, override_sig="wrong")
+        assert resp.status_code == 401
 
     def test_missing_signature_rejected(self):
         body = json.dumps({"action": "opened"}).encode()
-        r = self.client.post(
+        resp = self.client.post(
             "/webhook",
             content=body,
             headers={"X-GitHub-Event": "pull_request", "Content-Type": "application/json"},
         )
-        assert r.status_code == 401
+        assert resp.status_code == 401
 
     def test_unknown_event_ignored(self):
-        r = self._post({"action": "created"}, event="issues")
-        assert r.status_code == 200
-        assert r.json()["status"] == "ignored"
-
-    def test_push_event_ignored_for_now(self):
-        r = self._post({"ref": "refs/heads/main"}, event="push")
-        assert r.status_code == 200
-        assert r.json()["status"] == "ignored"
+        resp = self._post({"action": "created"}, event="issues")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "ignored"

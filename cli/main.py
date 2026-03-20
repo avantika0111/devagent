@@ -6,6 +6,7 @@ DevAgent CLI — the developer's interface.
 Phase 1 commands:
     devagent init     initialise .ai/ in a project
     devagent status   show the current .ai/ config summary
+    devagent plans    list all plans
 
 Phase 5 will add:
     devagent task     full agent cycle
@@ -13,17 +14,11 @@ Phase 5 will add:
     devagent ask      Q&A grounded in .ai/ context
     devagent review   review a specific file
     devagent scan     security scan
-    devagent plans    list all plans
-
-Usage:
-    cd your-project
-    devagent init
-    devagent status
+    devagent docker   docker build and health check
 """
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 import typer
@@ -36,7 +31,7 @@ from core.logging_config import setup_logging
 
 setup_logging()
 
-app     = typer.Typer(
+app = typer.Typer(
     name="devagent",
     help="AI coding assistant — plans, tests, implements, reviews.",
     add_completion=False,
@@ -87,8 +82,10 @@ def init(
     console.print("[bold]Next steps:[/bold]")
     console.print("  1. Fill in [cyan].ai/instruction.md[/cyan] — describe your project")
     console.print("  2. Fill in [cyan].ai/rules/[/cyan] files — your project's conventions")
-    console.print("  3. Set [cyan]NVIDIA_API_KEY[/cyan] and [cyan]GEMINI_API_KEY[/cyan] in .env")
-    console.print("  4. Run [cyan]devagent status[/cyan] to verify the config\n")
+    console.print("  3. Set [cyan]NVIDIA_API_KEY[/cyan] (build.nvidia.com) or")
+    console.print("     [cyan]GEMINI_API_KEY[/cyan] (aistudio.google.com — free) in .env")
+    console.print("  4. Set [cyan]GITHUB_TOKEN[/cyan] in .env")
+    console.print("  5. Run [cyan]devagent status[/cyan] to verify the config\n")
 
 
 # ---------------------------------------------------------------------------
@@ -104,8 +101,6 @@ def status(
 ):
     """
     Show the current DevAgent configuration for a project.
-
-    Reads .ai/ and prints a summary of what is configured and what is missing.
     """
     project_root = Path(path).resolve()
 
@@ -117,9 +112,14 @@ def status(
 
     console.print(f"\n[bold]DevAgent status[/bold] — {project_root}\n")
 
-    # Model and limits
-    console.print(f"  Model:          [cyan]{config.model}[/cyan]")
-    console.print(f"  Max iterations: [cyan]{config.max_iterations}[/cyan]")
+    # Provider info
+    if config.resolved_providers:
+        for i, p in enumerate(config.resolved_providers):
+            label = "Primary  " if i == 0 else f"Fallback {i}"
+            console.print(f"  {label}:       [cyan]{p.name}[/cyan] / [cyan]{p.model}[/cyan]")
+    else:
+        console.print("  [red]No providers available — check your API keys in .env[/red]")
+    console.print(f"  Max iterations:   [cyan]{config.max_iterations}[/cyan]")
     console.print()
 
     # instruction.md preview
@@ -135,34 +135,55 @@ def status(
     rules_table.add_column("Status",  style="green", no_wrap=True)
     rules_table.add_column("Preview", style="dim")
 
-    expected_rules = [
+    expected = [
         "architecture.md", "git.md", "testing.md",
         "security.md", "docker.md", "ci-cd.md",
     ]
-    for rule_file in expected_rules:
+    for rule_file in expected:
         if rule_file in config.rules:
-            preview = config.rules[rule_file][:60].replace("\n", " ")
-            rules_table.add_row(rule_file, "✓ found", preview + "…")
+            preview_text = config.rules[rule_file][:60].replace("\n", " ")
+            rules_table.add_row(rule_file, "✓ found", preview_text + "…")
         else:
             rules_table.add_row(rule_file, "[yellow]⚠ missing[/yellow]", "")
 
     console.print(rules_table)
     console.print()
 
-    # Languages and frameworks
     if config.languages:
-        langs = ", ".join(config.languages.keys())
-        console.print(f"  [bold]Languages:[/bold] {langs}")
+        console.print(f"  [bold]Languages:[/bold] {', '.join(config.languages.keys())}")
     if config.frameworks:
-        fws = ", ".join(config.frameworks.keys())
-        console.print(f"  [bold]Frameworks:[/bold] {fws}")
+        console.print(f"  [bold]Frameworks:[/bold] {', '.join(config.frameworks.keys())}")
 
-    # Plans
-    plans = config.list_plans()
-    console.print(f"\n  [bold]Plans:[/bold] {len(plans)} in .ai/plans/")
-    if plans:
-        for p in plans[-3:]:   # show last 3
-            console.print(f"    [dim]•[/dim] {p.name}")
+    plan_list = config.list_plans()
+    console.print(f"\n  [bold]Plans:[/bold] {len(plan_list)} in .ai/plans/")
+    for p in plan_list[-3:]:
+        console.print(f"    [dim]•[/dim] {p.name}")
+    console.print()
+
+
+# ---------------------------------------------------------------------------
+# plans
+# ---------------------------------------------------------------------------
+
+@app.command()
+def plans(
+    path: str = typer.Argument(".", help="Project directory"),
+):
+    """List all plans in .ai/plans/."""
+    try:
+        config = DevAgentConfig.load(path)
+    except FileNotFoundError:
+        rprint("[red]No .ai/ directory found. Run 'devagent init' first.[/red]")
+        raise typer.Exit(1)
+
+    plan_list = config.list_plans()
+    if not plan_list:
+        rprint("[dim]No plans yet.[/dim]")
+        return
+
+    console.print(f"\n[bold]Plans[/bold] ({len(plan_list)} total)\n")
+    for p in plan_list:
+        console.print(f"  [cyan]{p.name}[/cyan]  [dim]{p.stat().st_size} bytes[/dim]")
     console.print()
 
 
@@ -202,24 +223,9 @@ def scan():
 
 
 @app.command()
-def plans():
-    """List all plans in .ai/plans/."""
-    try:
-        config = DevAgentConfig.load(".")
-    except FileNotFoundError:
-        rprint("[red]No .ai/ directory found. Run 'devagent init' first.[/red]")
-        raise typer.Exit(1)
-
-    plan_list = config.list_plans()
-    if not plan_list:
-        rprint("[dim]No plans yet. Run 'devagent plan' to create one.[/dim]")
-        return
-
-    console.print(f"\n[bold]Plans[/bold] ({len(plan_list)} total)\n")
-    for p in plan_list:
-        size = p.stat().st_size
-        console.print(f"  [cyan]{p.name}[/cyan]  [dim]{size} bytes[/dim]")
-    console.print()
+def docker():
+    """[Phase 4] Build and verify the Docker container."""
+    rprint("[yellow]'devagent docker' is coming in Phase 4.[/yellow]")
 
 
 # ---------------------------------------------------------------------------

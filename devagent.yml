@@ -1,57 +1,56 @@
 # DevAgent configuration
-# Committed alongside your code — no secrets here.
-# See README for full reference.
+#
+# Providers are tried in order — first one with a key set and reachable wins.
+# Failed providers are skipped for the rest of the run (circuit breaker).
+# All providers use the OpenAI-compatible API — one client handles all of them.
+#
+# To use a provider: set its api_key_env variable in .env, uncomment here.
 
-# ---------------------------------------------------------------------------
-# Model configuration
-# ---------------------------------------------------------------------------
+providers:
+  - name: nvidia
+    base_url: https://integrate.api.nvidia.com/v1
+    api_key_env: NVIDIA_API_KEY      # get at build.nvidia.com
+    model: qwen/qwen3.5-122b-a10b
 
-# Primary provider — NVIDIA NIM
-provider: nvidia
-model: qwen/qwen3.5-122b-a10b
+  - name: gemini
+    base_url: https://generativelanguage.googleapis.com/v1beta/openai/
+    api_key_env: GEMINI_API_KEY      # get at aistudio.google.com — free tier
+    model: gemini-2.5-flash
 
-# Fallback provider — Gemini free tier
-# Used automatically if NIM is unreachable or rate-limited.
-fallback_provider: gemini
-fallback_model: gemini-2.5-flash
+  # - name: openai
+  #   base_url: https://api.openai.com/v1
+  #   api_key_env: OPENAI_API_KEY
+  #   model: gpt-4o
 
-# Per-agent model overrides (optional)
-# Reasoning-heavy agents use NIM. Mechanical agents can use the fallback.
-# agent_models:
-#   plan_agent:      qwen/qwen3.5-122b-a10b   # needs strong reasoning
-#   architect_agent: qwen/qwen3.5-122b-a10b   # same
-#   review_agent:    qwen/qwen3.5-122b-a10b   # cross-file reasoning
-#   tdd_agent:       gemini-2.5-flash          # writing tests — fallback is fine
-#   github_agent:    gemini-2.5-flash          # mechanical ops — fallback is fine
-#   docker_agent:    gemini-2.5-flash          # same
-#   security_agent:  gemini-2.5-flash          # pattern scanning — fallback works
+  # - name: groq
+  #   base_url: https://api.groq.com/openai/v1
+  #   api_key_env: GROQ_API_KEY
+  #   model: llama-3.3-70b-versatile
+
+  # - name: ollama
+  #   base_url: http://localhost:11434/v1
+  #   api_key_env: ""               # no key needed
+  #   model: qwen2.5-coder:14b
 
 max_iterations_per_agent: 15
 
-# ---------------------------------------------------------------------------
-# Agent behaviour
-# ---------------------------------------------------------------------------
-
 agents:
-
   plan:
-    require_approval: true    # always show plan before proceeding
-    save_plans: true          # store all plans in .ai/plans/
+    require_approval: true
+    save_plans: true
 
   tdd:
     run_tests_before_implement: true
-    fail_on_no_tests: true    # refuse to implement if tests cannot be written
-    framework: pytest         # pytest | jest | unittest
+    fail_on_no_tests: true
+    framework: pytest
 
   security:
     scan_on: [implement, commit]
-    fail_on: [critical, high] # severity levels that block the pipeline
-    # custom_rules: .ai/rules/security-extra.md   # optional extra rules
+    fail_on: [critical, high]
 
   github:
     branch_format: "{type}/{id}-{description}"
     commit_format: "{type}({scope}): {description}"
-    # pr_template: .ai/pr-template.md             # optional
 
   docker:
     verify_build: true
