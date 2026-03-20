@@ -108,7 +108,7 @@ def tmp_ai_dir(tmp_path: Path) -> Path:
         "    base_url: https://generativelanguage.googleapis.com/v1beta/openai/\n"
         "    api_key_env: GEMINI_API_KEY\n"
         "    model: gemini-2.5-flash\n"
-        "max_iterations_per_agent: 5\n"
+        "max_iterations_per_agent: 10\n"
         "agents:\n"
         "  plan:\n"
         "    require_approval: true\n"

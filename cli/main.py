@@ -276,9 +276,54 @@ def ask(
 
 
 @app.command()
-def review(file_path: str = typer.Argument(..., help="File to review")):
-    """[Phase 3] Review a file against your project rules."""
-    rprint("[yellow]'devagent review' is coming in Phase 3.[/yellow]")
+def review(
+    file_path: str = typer.Argument(..., help="File to review against project rules"),
+    path: str = typer.Option(".", "--path", "-p", help="Project directory"),
+):
+    """Review a file against your project rules."""
+    from agents.review_agent import ReviewAgent
+    from core.memory import MemoryStore
+
+    try:
+        config = DevAgentConfig.load(path)
+        memory = MemoryStore(task_id="review", repo="local")
+
+        # Seed memory with the file as the "implementation" to review
+        memory.set("tdd_impl_written",  [file_path])
+        memory.set("tdd_tests_written", [])
+        memory.set("tdd_all_passing",   True)   # standalone review assumes tests pass
+        memory.set("plan_content",
+            f"Standalone review of: {file_path}\n"
+            "Review this file against project architecture, testing, and security rules."
+        )
+        memory.set("affected_files", [file_path])
+
+        agent  = ReviewAgent(config=config, memory=memory)
+        result = agent.run(
+            f"Review the file {file_path} against all project rules. "
+            "Read the file, check for architecture, testing, and security issues. "
+            "Then approve or request changes."
+        )
+    except FileNotFoundError as e:
+        rprint(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+
+    if result.success:
+        approved = memory.get("review_approved", False)
+        if approved:
+            rprint(f"\n[green][ok] {file_path} - no issues found[/green]\n")
+        else:
+            issues = memory.get_findings(agent="review_agent")
+            rprint(f"\n[yellow][!] {len(issues)} issue(s) found in {file_path}[/yellow]\n")
+            for i in issues:
+                rprint(f"  [{i.severity.value.upper()}] {i.title}")
+                rprint(f"  [dim]{i.description}[/dim]")
+                if i.suggestion:
+                    rprint(f"  Fix: [cyan]{i.suggestion}[/cyan]")
+                rprint("")
+    else:
+        rprint(f"[red]Review agent failed:[/red] {result.error}")
+        raise typer.Exit(1)
 
 
 @app.command()

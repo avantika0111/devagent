@@ -152,7 +152,7 @@ class TestDevAgentConfig:
         assert "python.md"         in config.languages
         assert "fastapi.md"        in config.frameworks
         assert config.model == "qwen/qwen3.5-122b-a10b"
-        assert config.max_iterations == 5
+        assert config.max_iterations == 10
 
     def test_missing_ai_dir_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError, match=r"\.ai/"):
