@@ -327,15 +327,96 @@ def review(
 
 
 @app.command()
-def scan():
-    """[Phase 4] Run a security scan on the current directory."""
-    rprint("[yellow]'devagent scan' is coming in Phase 4.[/yellow]")
+def scan(
+    path: str = typer.Option(".", "--path", "-p", help="Project directory"),
+    full: bool = typer.Option(False, "--full", help="Force full project scan even if a plan exists"),
+):
+    """
+    Security scan - secrets, OWASP patterns, and dependency CVEs.
+    Scans changed files if a plan exists, otherwise the full project.
+    """
+    from agents.security_agent import SecurityAgent
+    from core.memory import MemoryStore
+
+    try:
+        config = DevAgentConfig.load(path)
+        memory = MemoryStore(task_id="scan", repo="local")
+
+        # Force full scan if --full flag set
+        if full:
+            memory.set("affected_files", [])
+
+        agent  = SecurityAgent(config=config, memory=memory)
+        result = agent.run(
+            "Run a full security scan: get scan targets, scan for secrets, "
+            "run semgrep OWASP check, run pip-audit, then post the report."
+        )
+    except FileNotFoundError as e:
+        rprint(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+
+    if result.success:
+        passed = memory.get("security_passed", True)
+        findings = memory.get_findings(agent="security_agent")
+        high_plus = [f for f in findings
+                     if f.severity.value in ("critical", "high")
+                     and "not-installed" not in (f.source or "")]
+
+        if passed:
+            rprint(f"\n[green][ok] Security scan passed[/green] "
+                   f"({len(findings)} finding(s), none blocking)\n")
+        else:
+            rprint(f"\n[red][BLOCKED] {len(high_plus)} blocking finding(s)[/red]\n")
+            for f in high_plus:
+                rprint(f"  [{f.severity.value.upper()}] {f.title}")
+                rprint(f"  [dim]{f.description}[/dim]")
+                if f.suggestion:
+                    rprint(f"  Fix: [cyan]{f.suggestion}[/cyan]")
+                rprint("")
+            raise typer.Exit(1)
+    else:
+        rprint(f"[red]Security agent failed:[/red] {result.error}")
+        raise typer.Exit(1)
 
 
 @app.command()
-def docker():
-    """[Phase 4] Build and verify the Docker container."""
-    rprint("[yellow]'devagent docker' is coming in Phase 4.[/yellow]")
+def docker(
+    path: str = typer.Option(".", "--path", "-p", help="Project directory"),
+):
+    """Build the Docker image and verify the health endpoint."""
+    from agents.docker_agent import DockerAgent
+    from core.memory import MemoryStore
+
+    try:
+        config = DevAgentConfig.load(path)
+        memory = MemoryStore(task_id="docker-check", repo="local")
+        agent  = DockerAgent(config=config, memory=memory)
+        result = agent.run(
+            "Check Docker availability, build the image, start the container, "
+            "verify the health endpoint, read logs, stop the container, "
+            "then post the report."
+        )
+    except FileNotFoundError as e:
+        rprint(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+
+    if result.success:
+        skipped = memory.get("docker_skipped", False)
+        passed  = memory.get("docker_passed",  True)
+
+        if skipped:
+            rprint("\n[yellow][SKIPPED] Docker not available - check skipped[/yellow]\n")
+        elif passed:
+            size = memory.get("docker_image_size", "?")
+            secs = memory.get("docker_build_time", "?")
+            rprint(f"\n[green][ok] Docker check passed[/green] "
+                   f"({size}MB, {secs}s build)\n")
+        else:
+            rprint("\n[red][FAILED] Docker health check failed[/red]\n")
+            raise typer.Exit(1)
+    else:
+        rprint(f"[red]Docker agent failed:[/red] {result.error}")
+        raise typer.Exit(1)
 
 
 # ---------------------------------------------------------------------------

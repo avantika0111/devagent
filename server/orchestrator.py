@@ -3,13 +3,16 @@ server/orchestrator.py
 
 Coordinates agents for a task or PR event.
 
-Phase 2 cycle (plan -> architect):
-    1. PlanAgent    - creates .ai/plans/PLAN-XXX.md
-    2. Approval     - shows plan to developer, waits if interactive
+Full pipeline (Phases 1-4):
+    1. PlanAgent      - creates .ai/plans/PLAN-XXX.md
+    2. Approval       - shows plan to developer, waits if interactive
     3. ArchitectAgent - validates plan against architecture rules
-    4. Decision     - proceed or halt based on architect verdict
+    4. TDDAgent       - writes tests first, then implements
+    5. ReviewAgent    - reviews implementation before PR
+    6. SecurityAgent  - secrets, OWASP, CVE scan
+    7. DockerAgent    - build and health check
 
-Phase 3+ will add TDD, implement, security, review, GitHub, Docker.
+Phase 5 will add: GitHubAgent (branch, commit, open PR).
 
 The orchestrator owns the MemoryStore for each run.
 All agents share the same memory instance - findings accumulate.
@@ -147,14 +150,55 @@ class Orchestrator:
                 memory=memory,
             )
 
+        # -- Phase 4: Security scan -------------------------------------------
+        sec_result = self._run_security_agent(memory)
+        if not sec_result.success:
+            return OrchestratorResult(
+                success=False,
+                stage="security",
+                error=sec_result.error,
+                memory=memory,
+            )
+
+        if not memory.get("security_passed", True):
+            issues = memory.get_findings(agent="security_agent",
+                                         min_severity=Severity.HIGH)
+            issues = [f for f in issues
+                      if "not-installed" not in (f.source or "")]
+            _print_security_issues(issues)
+            return OrchestratorResult(
+                success=False,
+                stage="security",
+                error=f"Security scan blocked: {len(issues)} HIGH+ finding(s)",
+                memory=memory,
+            )
+
+        # -- Phase 4: Docker check --------------------------------------------
+        docker_result = self._run_docker_agent(memory)
+        if not docker_result.success:
+            return OrchestratorResult(
+                success=False,
+                stage="docker",
+                error=docker_result.error,
+                memory=memory,
+            )
+
+        if not memory.get("docker_passed", True):
+            return OrchestratorResult(
+                success=False,
+                stage="docker",
+                error="Docker health check failed",
+                memory=memory,
+            )
+
         logger.info(
-            f"[{self.name}] Implementation approved. "
+            f"[orchestrator] Security and Docker checks passed. "
             "GitHub agent runs in Phase 5."
         )
 
         return OrchestratorResult(
             success=True,
-            stage="architect",
+            stage="docker",
             plan_id=memory.get("plan_id"),
             plan_path=plan_path,
             memory=memory,
@@ -173,7 +217,7 @@ class Orchestrator:
     ) -> None:
         """
         Handle a PR event from GitHub webhook.
-        Phase 2: posts plan + architect summary as PR comment.
+        Posts plan + architect summary as PR comment (Phase 2 behaviour on webhook).
         """
         memory = MemoryStore(
             task_id=f"PR-{pr_number}",
@@ -257,7 +301,30 @@ class Orchestrator:
         if not result.success:
             logger.error(f"ReviewAgent failed: {result.error}")
         return result
-  
+
+    def _run_security_agent(self, memory: MemoryStore):
+        from agents.security_agent import SecurityAgent
+        agent = SecurityAgent(config=self.config, memory=memory)
+        result = agent.run(
+            "Run a full security scan: get scan targets, scan for secrets, "
+            "run semgrep OWASP check, run pip-audit, then post the report."
+        )
+        if not result.success:
+            logger.error(f"SecurityAgent failed: {result.error}")
+        return result
+
+    def _run_docker_agent(self, memory: MemoryStore):
+        from agents.docker_agent import DockerAgent
+        agent = DockerAgent(config=self.config, memory=memory)
+        result = agent.run(
+            "Check Docker availability, build the image, start the container, "
+            "verify the health endpoint, read logs, stop the container, "
+            "then post the report."
+        )
+        if not result.success:
+            logger.error(f"DockerAgent failed: {result.error}")
+        return result
+
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
@@ -316,7 +383,7 @@ def _print_violations(violations) -> None:
         return
     print("\n[!]  Architect found violations:\n")
     for v in violations:
-        print(f"  [{v.severity.upper()}] {v.title}")
+        print(f"  [{v.severity.value.upper()}] {v.title}")
         print(f"  {v.description}")
         if v.suggestion:
             print(f"  Fix: {v.suggestion}")
@@ -327,6 +394,18 @@ def _print_review_issues(issues) -> None:
     if not issues:
         return
     print("\n[!] Review found issues:\n")
+    for i in issues:
+        print(f"  [{i.severity.value.upper()}] {i.title}")
+        print(f"  {i.description}")
+        if i.suggestion:
+            print(f"  Fix: {i.suggestion}")
+        print()
+
+
+def _print_security_issues(issues) -> None:
+    if not issues:
+        return
+    print("\n[BLOCKED] Security scan found blocking issues:\n")
     for i in issues:
         print(f"  [{i.severity.value.upper()}] {i.title}")
         print(f"  {i.description}")
@@ -375,6 +454,6 @@ def _build_pr_comment(memory: MemoryStore, architect_approved: bool) -> str:
 
     lines.append("")
     lines.append("---")
-    lines.append("*DevAgent Phase 2 - TDD and implementation coming in Phase 3*")
+    lines.append("*DevAgent Phase 4 - GitHub agent and full PR automation coming in Phase 5*")
 
     return "\n".join(lines)
