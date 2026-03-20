@@ -109,10 +109,47 @@ class Orchestrator:
                 memory=memory,
             )
 
-        # -- Phase 3+ agents go here -----------------------------------
+        # -- Phase 3: TDD -----------------------------------------------------
+        tdd_result = self._run_tdd_agent(memory)
+        if not tdd_result.success:
+            return OrchestratorResult(
+                success=False,
+                stage="tdd",
+                error=tdd_result.error,
+                memory=memory,
+            )
+
+        if not memory.get("tdd_all_passing", False):
+            return OrchestratorResult(
+                success=False,
+                stage="tdd",
+                error="Tests did not pass after implementation",
+                memory=memory,
+            )
+
+        # -- Phase 3: Review --------------------------------------------------
+        review_result = self._run_review_agent(memory)
+        if not review_result.success:
+            return OrchestratorResult(
+                success=False,
+                stage="review",
+                error=review_result.error,
+                memory=memory,
+            )
+
+        if not memory.get("review_approved", False):
+            issues = memory.get_findings(agent="review_agent")
+            _print_review_issues(issues)
+            return OrchestratorResult(
+                success=False,
+                stage="review",
+                error=f"Review requested changes: {memory.get('review_verdict')}",
+                memory=memory,
+            )
+
         logger.info(
-            f"Plan '{memory.get('plan_id')}' approved by architect. "
-            f"TDD agent runs in Phase 3."
+            f"[{self.name}] Implementation approved. "
+            "GitHub agent runs in Phase 5."
         )
 
         return OrchestratorResult(
@@ -199,6 +236,28 @@ class Orchestrator:
             logger.error(f"ArchitectAgent failed: {result.error}")
         return result
 
+    def _run_tdd_agent(self, memory: MemoryStore):
+        from agents.tdd_agent import TDDAgent
+        agent = TDDAgent(config=self.config, memory=memory)
+        result = agent.run(
+            "Read the approved plan, write failing tests first, "
+            "then implement to make them pass. Show a diff when done."
+        )
+        if not result.success:
+            logger.error(f"TDDAgent failed: {result.error}")
+        return result
+
+    def _run_review_agent(self, memory: MemoryStore):
+        from agents.review_agent import ReviewAgent
+        agent = ReviewAgent(config=self.config, memory=memory)
+        result = agent.run(
+            "Review the implementation against the plan, test coverage, "
+            "architecture rules, and security. Then approve or request changes."
+        )
+        if not result.success:
+            logger.error(f"ReviewAgent failed: {result.error}")
+        return result
+  
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
@@ -261,6 +320,18 @@ def _print_violations(violations) -> None:
         print(f"  {v.description}")
         if v.suggestion:
             print(f"  Fix: {v.suggestion}")
+        print()
+
+
+def _print_review_issues(issues) -> None:
+    if not issues:
+        return
+    print("\n[!] Review found issues:\n")
+    for i in issues:
+        print(f"  [{i.severity.value.upper()}] {i.title}")
+        print(f"  {i.description}")
+        if i.suggestion:
+            print(f"  Fix: {i.suggestion}")
         print()
 
 

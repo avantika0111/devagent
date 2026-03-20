@@ -42,7 +42,7 @@ agents:
   tdd:
     run_tests_before_implement: true
     fail_on_no_tests: true
-    framework: pytest
+    framework: pytest           # pytest | unittest | jest
 
   security:
     scan_on: [implement, commit]
