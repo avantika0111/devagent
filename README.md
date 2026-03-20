@@ -16,6 +16,29 @@ You stay in control. DevAgent stays in context.
 
 ---
 
+## Provider chain
+
+DevAgent uses two providers in sequence. No single provider is a hard dependency.
+
+```
+Request
+   ↓
+NVIDIA NIM  (qwen/qwen3.5-122b-a10b)   →  success → done
+   ↓ fails or key missing
+Gemini 2.5 Flash  (free tier)           →  success → done
+   ↓ fails
+AgentError — both providers down, logged clearly
+```
+
+| Provider | Key variable | Where to get it | Cost |
+|---|---|---|---|
+| NVIDIA NIM (primary) | `NVIDIA_API_KEY` | build.nvidia.com → Get API Key | Pay per token |
+| Gemini 2.5 Flash (fallback) | `GEMINI_API_KEY` | aistudio.google.com → Get API Key | Free tier: 10 RPM, 250 req/day |
+
+Both providers use the OpenAI-compatible API format — same client, different `base_url`.
+
+---
+
 ## How it works
 
 ### The `.ai/` directory (you write this once, DevAgent maintains the rest)
@@ -42,7 +65,7 @@ your-project/
         └── react.md
 ```
 
-`instruction.md` is the only file that is always loaded by every agent — it is the project brief. Everything under `rules/` is loaded selectively based on which agent is running.
+`instruction.md` is always loaded by every agent. Everything under `rules/` is loaded selectively.
 
 ### Which agent loads which rules
 
@@ -58,8 +81,6 @@ your-project/
 
 ### The agent cycle
 
-Every task — feature, bugfix, refactor — follows this cycle. No skipping steps.
-
 ```
  User task
      ↓
@@ -68,7 +89,7 @@ Every task — feature, bugfix, refactor — follows this cycle. No skipping ste
      ↓
  Architect agent     validates plan against architecture.md
      ↓
- TDD agent           writes failing tests (reads testing.md)
+ TDD agent           writes failing tests first (reads testing.md)
      ↓
  Implement           writes code to make tests pass
      ↓
@@ -95,7 +116,7 @@ Validates the plan against `architecture.md`. Checks for layer boundary violatio
 Reads `testing.md` to know your test framework, folder conventions, and coverage requirements. Writes failing tests before any implementation exists. Tests are committed first — implementation follows.
 
 ### Security agent
-Reads `security.md` and `architecture.md`. Scans for hardcoded secrets, insecure patterns, OWASP Top 10 issues, and vulnerable dependencies. Project-specific security rules in `security.md` are applied on top of general scanning.
+Reads `security.md` and `architecture.md`. Scans for hardcoded secrets, insecure patterns, OWASP Top 10 issues, and vulnerable dependencies.
 
 ### Review agent
 Loads `architecture.md`, `testing.md`, and `security.md` for a full cross-domain review. Checks implementation against the original plan and all relevant rules. Iterates before surfacing the PR to you.
@@ -130,7 +151,7 @@ Deployed on AWS ECS. Used by internal finance teams only.
 - Performance baseline: p95 < 200ms for all read endpoints
 ```
 
-### `rules/architecture.md` — loaded by plan, architect, review agents
+### `rules/architecture.md`
 
 ```markdown
 # Architecture rules
@@ -139,13 +160,11 @@ Deployed on AWS ECS. Used by internal finance teams only.
 - Business logic in /services only — never in /routes
 - Database access only through /repositories
 - Shared types in /schemas — Pydantic models only, no raw dicts across boundaries
-- Utilities in /utils — stateless functions only, no DB or service calls
 
 ## Naming
 - Routes: kebab-case (/user-profile not /userProfile)
 - Functions: snake_case, verb-first (get_user, create_transaction)
 - Classes: PascalCase, noun-only (UserRepository, TransactionService)
-- Files: snake_case, match the class they contain (user_repository.py)
 
 ## Layer boundaries
 - Routes call services only — never repositories directly
@@ -153,7 +172,7 @@ Deployed on AWS ECS. Used by internal finance teams only.
 - Repositories call the ORM only — no raw SQL strings
 ```
 
-### `rules/git.md` — loaded by plan and github agents
+### `rules/git.md`
 
 ```markdown
 # Git rules
@@ -161,109 +180,15 @@ Deployed on AWS ECS. Used by internal finance teams only.
 ## Branches
 - Format: {type}/{ticket-id}-{short-description}
 - Example: feat/DA-42-add-jwt-auth
-- Types: feat, fix, refactor, docs, chore, test
 - Never commit directly to main or develop
 
 ## Commits
 - Format: {type}({scope}): {description}
 - Example: feat(auth): add JWT token validation
-- Keep subject under 72 characters
-- Use imperative mood — "add" not "added"
 
 ## Pull requests
-- Title matches commit format
 - Body must reference the plan: "Implements .ai/plans/PLAN-XXX.md"
-- One logical change per PR
 - Squash merge only — no merge commits on main
-```
-
-### `rules/testing.md` — loaded by tdd agent
-
-```markdown
-# Testing rules
-
-## Framework
-- Python: pytest only — no unittest
-- Test files: tests/ folder, mirroring source structure
-- File naming: test_{module_name}.py
-- Function naming: test_{function}_{scenario} (test_validate_token_expired)
-
-## Requirements
-- Every public function must have a unit test
-- Every route must have an integration test
-- Minimum coverage: 85%
-- No mocking the database in integration tests — use test DB with fixtures
-
-## Structure
-- Arrange / Act / Assert pattern in every test
-- One assertion per test where possible
-- Fixtures in conftest.py — never inline setup in test functions
-```
-
-### `rules/security.md` — loaded by security and review agents
-
-```markdown
-# Security rules
-
-## Secrets
-- No secrets in code — environment variables only
-- No .env files committed — .env.example with placeholder values only
-- Rotate any accidentally committed secret immediately
-
-## Input handling
-- All inputs validated with Pydantic before processing
-- Never trust client-supplied IDs without ownership check
-- Sanitise all data before logging — no PII in logs
-
-## Queries
-- ORM or parameterised statements only — never f-string SQL
-- No raw SQL strings anywhere in the codebase
-
-## Dependencies
-- No packages with known critical CVEs
-- Review pip-audit output before every release
-```
-
-### `rules/docker.md` — loaded by docker agent
-
-```markdown
-# Docker rules
-
-## Dockerfile
-- Multi-stage builds — separate build and runtime stages
-- Non-root user in runtime stage
-- No secrets in Dockerfile or build args
-- Pin base image versions — never use :latest
-
-## Health checks
-- Every service must have a /health endpoint
-- HEALTHCHECK instruction in every Dockerfile
-- Startup timeout: 30 seconds
-
-## Compose
-- One compose file for local dev, separate for CI
-- Named volumes for persistent data — never bind mounts in CI
-- Explicit resource limits on all services
-```
-
-### `rules/ci-cd.md` — loaded when relevant
-
-```markdown
-# CI/CD rules
-
-## Pipeline
-- Lint → test → security scan → build → deploy (never skip steps)
-- Tests must pass before any deployment
-- Security scan failure blocks deployment
-
-## Environments
-- Staging mirrors production configuration exactly
-- No direct deploys to production — always through staging first
-- Feature flags for risky changes
-
-## Secrets
-- OIDC for cloud authentication — no long-lived credentials in CI
-- Secrets in GitHub Actions secrets — never in workflow files
 ```
 
 ### `.ai/plans/PLAN-001.md` — generated by DevAgent
@@ -276,30 +201,18 @@ Deployed on AWS ECS. Used by internal finance teams only.
 **Status:** approved
 
 ## Affected files
-- routes/user.py              (add auth dependency)
-- services/auth.py            (new — JWT validation logic)
-- repositories/token.py       (new — token blacklist check)
-- schemas/auth.py             (new — token payload schema)
-- tests/test_auth.py          (new — unit tests for auth service)
-- tests/integration/test_user_routes.py  (update — add auth headers)
+- routes/user.py, services/auth.py (new), repositories/token.py (new)
+- schemas/auth.py (new), tests/test_auth.py (new)
 
 ## Steps
-1. Create TokenPayload schema in schemas/auth.py
-2. Create AuthService with validate_token() in services/auth.py
-3. Create TokenRepository with is_blacklisted() in repositories/token.py
-4. Write failing tests for AuthService
-5. Implement AuthService to pass tests
-6. Write failing integration tests for secured routes
-7. Add auth dependency to all /user routes to pass integration tests
-8. Update OpenAPI docs with security scheme
-
-## Risks
-- Existing integration tests will fail until auth headers are added — expected
-- Token blacklist adds a DB call per request — acceptable at current scale
+1. Create TokenPayload schema
+2. Create AuthService with validate_token()
+3. Write failing tests for AuthService
+4. Implement AuthService to pass tests
+5. Add auth dependency to all /user routes
 
 ## Rules checked
 - architecture.md: business logic in /services ✓
-- architecture.md: DB access through /repositories ✓
 - testing.md: tests written before implementation ✓
 - security.md: Pydantic validation on token payload ✓
 - git.md: branch will be feat/DA-47-add-jwt-auth ✓
@@ -332,29 +245,37 @@ cd your-project
 devagent init
 ```
 
-Creates the `.ai/` directory with the full folder structure and template files for every rule domain. Fill in the templates — this is the most important step.
+Creates the `.ai/` directory with template files. Fill them in — this is the most important step.
 
-### 2. Set your API key
+### 2. Set your API keys
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...
+cp .env.example .env
 ```
+
+Fill in `.env`:
+
+```env
+# Primary — NVIDIA NIM
+# Get at: build.nvidia.com → Get API Key
+NVIDIA_API_KEY=nvapi-...
+
+# Fallback — Gemini free tier (no credit card needed)
+# Get at: aistudio.google.com → Get API Key
+GEMINI_API_KEY=AIza...
+
+# GitHub
+GITHUB_TOKEN=ghp_...
+GITHUB_WEBHOOK_SECRET=your-random-secret
+```
+
+You only need one provider to start. DevAgent uses Gemini automatically if `NVIDIA_API_KEY` is missing.
 
 ### 3. Run a task
 
 ```bash
 devagent task "add rate limiting to the /auth endpoints"
 ```
-
-DevAgent will:
-1. Load `instruction.md` + relevant rules from `.ai/rules/`
-2. Create `.ai/plans/PLAN-XXX.md` and show it to you
-3. Wait for your approval (`y` to proceed, `e` to edit)
-4. Write failing tests
-5. Implement to pass them
-6. Run security scan
-7. Self-review
-8. Open a PR
 
 ---
 
@@ -390,29 +311,80 @@ devagent plans
 ```yaml
 # .ai/devagent.yml
 
+# Providers tried in order — first one with a key set wins
+providers:
+  - name: nvidia
+    base_url: https://integrate.api.nvidia.com/v1
+    api_key_env: NVIDIA_API_KEY
+    model: qwen/qwen3.5-122b-a10b
+
+  - name: gemini
+    base_url: https://generativelanguage.googleapis.com/v1beta/openai/
+    api_key_env: GEMINI_API_KEY
+    model: gemini-2.5-flash
+
+  # Add any OpenAI-compatible provider here:
+  # - name: ollama
+  #   base_url: http://localhost:11434/v1
+  #   api_key_env: ""
+  #   model: qwen2.5-coder:14b
+
+max_iterations_per_agent: 15
+
 agents:
   plan:
-    require_approval: true        # always show plan before proceeding
-    save_plans: true              # store all plans in .ai/plans/
+    require_approval: true
+    save_plans: true
 
   tdd:
     run_tests_before_implement: true
     fail_on_no_tests: true
+    framework: pytest           # pytest | jest | unittest
 
   security:
     scan_on: [implement, commit]
     fail_on: [critical, high]
 
   github:
-    pr_template: .ai/pr-template.md    # optional
+    branch_format: "{type}/{id}-{description}"
+    commit_format: "{type}({scope}): {description}"
 
   docker:
     verify_build: true
     health_check_endpoint: /health
     startup_timeout_seconds: 30
+```
 
-model: claude-opus-4-5
-max_iterations_per_agent: 15
+---
+
+## Docker
+
+```bash
+# Build and run
+docker build -t devagent .
+docker run -p 8080:8080 --env-file .env devagent
+
+# Or with Compose
+docker-compose up
+```
+
+For webhook testing without a public URL:
+
+```bash
+# Windows
+winget install ngrok
+ngrok http 8080
+
+# Mac / Linux
+brew install ngrok
+ngrok http 8080
+
+# Paste the https URL into:
+# GitHub repo → Settings → Webhooks → Add webhook
+#   Payload URL:   https://xxxx.ngrok-free.app/webhook
+#   Content type:  application/json
+#   Secret:        (same as GITHUB_WEBHOOK_SECRET in .env)
+#   Events:        Pull requests
 ```
 
 ---
@@ -423,10 +395,11 @@ max_iterations_per_agent: 15
 devagent/
 │
 ├── core/
-│   ├── base_agent.py         # agentic loop — all agents extend this
+│   ├── base_agent.py         # agentic loop + provider chain (NIM → Gemini)
 │   ├── github_client.py      # GitHub API wrapper
 │   ├── memory.py             # per-task memory and context store
-│   └── config.py             # .ai/ loader — reads rules selectively per agent
+│   ├── config.py             # .ai/ loader — reads rules selectively per agent
+│   └── logging_config.py     # structured logging setup
 │
 ├── agents/
 │   ├── plan_agent.py         # task planning + .ai/plans/ writer
@@ -440,9 +413,10 @@ devagent/
 ├── cli/
 │   └── main.py               # devagent task / plan / ask / review / scan
 │
-├── platform/
+├── server/
+│   ├── webhook.py            # FastAPI webhook listener
 │   ├── orchestrator.py       # agent cycle coordinator
-│   └── reporter.py           # output formatter
+│   └── reporter.py           # unified output formatter
 │
 └── tests/
 ```
@@ -451,8 +425,11 @@ devagent/
 
 ## Tech stack
 
-- **[Anthropic Claude](https://anthropic.com)** — all agent reasoning
+- **[NVIDIA NIM](https://build.nvidia.com)** — primary model provider (qwen3.5-122b)
+- **[Google Gemini](https://aistudio.google.com)** — free fallback (gemini-2.5-flash)
+- **[OpenAI Python SDK](https://github.com/openai/openai-python)** — OpenAI-compatible client used for both providers
 - **[PyGithub](https://pygithub.readthedocs.io)** — GitHub operations
+- **[FastAPI](https://fastapi.tiangolo.com)** — webhook listener
 - **[semgrep](https://semgrep.dev)** — security pattern scanning
 - **[pip-audit](https://pypi.org/project/pip-audit/)** — dependency CVE scanning
 - **[coverage.py](https://coverage.readthedocs.io)** — test coverage analysis

@@ -1,0 +1,58 @@
+# DevAgent configuration
+#
+# Providers are tried in order — first one with a key set and reachable wins.
+# Failed providers are skipped for the rest of the run (circuit breaker).
+# All providers use the OpenAI-compatible API — one client handles all of them.
+#
+# To use a provider: set its api_key_env variable in .env, uncomment here.
+
+providers:
+  - name: nvidia
+    base_url: https://integrate.api.nvidia.com/v1
+    api_key_env: NVIDIA_API_KEY      # get at build.nvidia.com
+    model: qwen/qwen3.5-122b-a10b
+
+  - name: gemini
+    base_url: https://generativelanguage.googleapis.com/v1beta/openai/
+    api_key_env: GEMINI_API_KEY      # get at aistudio.google.com — free tier
+    model: gemini-2.5-flash
+
+  # - name: openai
+  #   base_url: https://api.openai.com/v1
+  #   api_key_env: OPENAI_API_KEY
+  #   model: gpt-4o
+
+  # - name: groq
+  #   base_url: https://api.groq.com/openai/v1
+  #   api_key_env: GROQ_API_KEY
+  #   model: llama-3.3-70b-versatile
+
+  # - name: ollama
+  #   base_url: http://localhost:11434/v1
+  #   api_key_env: ""               # no key needed
+  #   model: qwen2.5-coder:14b
+
+max_iterations_per_agent: 15
+
+agents:
+  plan:
+    require_approval: true
+    save_plans: true
+
+  tdd:
+    run_tests_before_implement: true
+    fail_on_no_tests: true
+    framework: pytest
+
+  security:
+    scan_on: [implement, commit]
+    fail_on: [critical, high]
+
+  github:
+    branch_format: "{type}/{id}-{description}"
+    commit_format: "{type}({scope}): {description}"
+
+  docker:
+    verify_build: true
+    health_check_endpoint: /health
+    startup_timeout_seconds: 30

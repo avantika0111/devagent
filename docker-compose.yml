@@ -1,0 +1,46 @@
+services:
+
+  devagent:
+    build:
+      context: .
+      target: runtime
+    ports:
+      - "8080:8080"
+    environment:
+      # Primary provider — NVIDIA NIM
+      # Get key at: build.nvidia.com → Get API Key
+      - NVIDIA_API_KEY=${NVIDIA_API_KEY}
+
+      # Fallback provider — Gemini free tier
+      # Get key at: aistudio.google.com → Get API Key (no credit card)
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+
+      # GitHub
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+      - GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET}
+
+      # Optional
+      - DEVAGENT_LOG_LEVEL=${DEVAGENT_LOG_LEVEL:-INFO}
+
+    volumes:
+      # Mount source for live reload in development
+      - .:/app
+      # Mount config separately so changes don't require rebuild
+      - ./devagent.yml:/app/devagent.yml:ro
+
+    restart: unless-stopped
+
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    command: >
+      uvicorn server.webhook:app
+      --host 0.0.0.0
+      --port 8080
+      --reload
+      --log-level ${DEVAGENT_LOG_LEVEL:-info}
