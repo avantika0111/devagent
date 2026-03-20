@@ -1,7 +1,7 @@
 """
-platform/webhook.py
+server/webhook.py
 
-FastAPI webhook listener — the entry point for all GitHub events.
+FastAPI webhook listener - the entry point for all GitHub events.
 Every PR open or push triggers this. The orchestrator takes it from here.
 
 Security:
@@ -9,7 +9,7 @@ Security:
     Requests with invalid or missing signatures are rejected with 401.
 
 Usage:
-    uvicorn platform.webhook:app --host 0.0.0.0 --port 8080 --reload
+    uvicorn server.webhook:app --host 0.0.0.0 --port 8080 --reload
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ from fastapi import FastAPI, Header, HTTPException, Request, BackgroundTasks
 from fastapi.responses import JSONResponse
 
 from core.logging_config import setup_logging
-from platform.orchestrator import Orchestrator
+from server.orchestrator import Orchestrator
 
 # Load .env before anything else reads environment variables
 load_dotenv()
@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="DevAgent",
-    description="AI coding assistant — GitHub webhook receiver",
+    description="AI coding assistant - GitHub webhook receiver",
     version="0.1.0",
     docs_url=None,   # disable Swagger in production
     redoc_url=None,
@@ -116,7 +116,7 @@ async def github_webhook(
 
     elif event == "ping":
         # GitHub sends a ping when a webhook is first configured
-        logger.info("Webhook ping received — connection established")
+        logger.info("Webhook ping received - connection established")
         return JSONResponse(
             status_code=200,
             content={"status": "pong"},
@@ -136,7 +136,7 @@ async def github_webhook(
 async def _handle_pr_event(payload: dict) -> None:
     """
     Handle a pull_request event.
-    Runs in the background — GitHub doesn't wait for this.
+    Runs in the background - GitHub doesn't wait for this.
     """
     pr      = payload.get("pull_request", {})
     repo    = payload.get("repository", {}).get("full_name", "")
@@ -146,7 +146,7 @@ async def _handle_pr_event(payload: dict) -> None:
     title   = pr.get("title", "")
     branch  = pr.get("head", {}).get("ref", "")
 
-    logger.info(f"Handling PR #{pr_num} ({action}) in {repo} — '{title}' by {author}")
+    logger.info(f"Handling PR #{pr_num} ({action}) in {repo} - '{title}' by {author}")
 
     try:
         orchestrator = Orchestrator(repo=repo)
@@ -157,7 +157,7 @@ async def _handle_pr_event(payload: dict) -> None:
             author=author,
         )
     except Exception as e:
-        # Log but don't crash the server — one bad run shouldn't take everything down
+        # Log but don't crash the server - one bad run shouldn't take everything down
         logger.error(
             f"Orchestrator failed for PR #{pr_num} in {repo}: {type(e).__name__}: {e}",
             exc_info=True,
@@ -173,7 +173,7 @@ def _verify_signature(body: bytes, signature_header: str) -> None:
     Verify the GitHub webhook HMAC-SHA256 signature.
 
     GitHub signs every request with the webhook secret.
-    We recompute the signature and compare — rejects anything that doesn't match.
+    We recompute the signature and compare - rejects anything that doesn't match.
 
     Raises:
         HTTPException 401: if secret not configured or signature invalid
@@ -182,7 +182,7 @@ def _verify_signature(body: bytes, signature_header: str) -> None:
     secret = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
 
     if not secret:
-        # In development you might skip verification — log a loud warning
+        # In development you might skip verification - log a loud warning
         logger.warning(
             "GITHUB_WEBHOOK_SECRET is not set. "
             "Webhook signature verification is DISABLED. "
@@ -199,7 +199,7 @@ def _verify_signature(body: bytes, signature_header: str) -> None:
     if not signature_header.startswith("sha256="):
         raise HTTPException(
             status_code=400,
-            detail="Malformed signature header — expected 'sha256=...'",
+            detail="Malformed signature header - expected 'sha256=...'",
         )
 
     expected_sig = signature_header[len("sha256="):]
@@ -213,7 +213,7 @@ def _verify_signature(body: bytes, signature_header: str) -> None:
 
     # Use hmac.compare_digest to prevent timing attacks
     if not hmac.compare_digest(computed_sig, expected_sig):
-        logger.warning("Webhook signature verification failed — request rejected")
+        logger.warning("Webhook signature verification failed - request rejected")
         raise HTTPException(
             status_code=401,
             detail="Invalid webhook signature",

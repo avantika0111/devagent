@@ -22,7 +22,7 @@ from core.config import DevAgentConfig, init_project
 from core.base_agent import (
     BaseAgent, AgentResult, AgentError, ToolError,
     OpenAIResponseAdapter, TextBlock, ToolUseBlock,
-    _to_openai_tools, _map_finish_reason,
+    _to_openai_tool_format, _map_finish_reason,
 )
 
 
@@ -165,7 +165,7 @@ class TestDevAgentConfig:
 
     def test_provider_defaults(self, tmp_ai_dir):
         config = DevAgentConfig.load(tmp_ai_dir)
-        # conftest devagent.yml doesn't set provider — check defaults are applied
+        # conftest devagent.yml doesn't set provider - check defaults are applied
         assert isinstance(config.resolved_providers, list)
         assert all(hasattr(p, "name") for p in config.resolved_providers)
 
@@ -179,8 +179,9 @@ class TestDevAgentConfig:
 
     def test_build_context_security_agent(self, config):
         context = config.build_agent_context("security_agent")
-        assert "No secrets"        in context   # security.md
-        assert "services layer"    in context   # architecture.md
+
+        assert "No secrets"        in context   # from security.md
+        assert "Business logic"    in context   # from architecture.md
         assert "pytest only"   not in context   # testing.md not for security
 
     def test_build_context_github_agent(self, config):
@@ -294,15 +295,20 @@ class TestBaseAgentProviderChain:
         assert result.success
         assert call_count["n"] == 2   # tried NIM once, then Gemini
 
-    def test_raises_when_both_keys_missing(self, config, memory, monkeypatch):
+    def test_raises_when_both_keys_missing(self, tmp_ai_dir, monkeypatch):
+        # Empty both keys BEFORE loading config so _resolve_providers sees no keys
         monkeypatch.setenv("NVIDIA_API_KEY", "")
         monkeypatch.setenv("GEMINI_API_KEY", "")
 
-        agent  = self._make_agent(config, memory)
-        result = agent.run("test task")
+        # Load config now — resolved_providers will be empty
+        config = DevAgentConfig.load(tmp_ai_dir)
+        memory = MemoryStore(task_id="test", repo="test")
 
-        assert not result.success
-        assert "NVIDIA_API_KEY" in result.error or "GEMINI_API_KEY" in result.error
+        # Should raise at agent init time — no providers available
+        with pytest.raises(AgentError) as exc_info:
+            ConcreteAgent(config=config, memory=memory)
+
+        assert "no providers" in exc_info.value.args[0].lower()
 
     def test_uses_gemini_directly_when_no_nvidia_key(self, config, memory, monkeypatch):
         monkeypatch.setenv("NVIDIA_API_KEY", "")
@@ -389,7 +395,7 @@ class TestOpenAIResponseAdapter:
 
 class TestToolConversion:
 
-    def test_to_openai_tools(self):
+    def test_to_openai_tool_format(self):
         tool_defs = [
             {
                 "name":        "get_file",
@@ -403,18 +409,18 @@ class TestToolConversion:
                 },
             }
         ]
-        openai_tools = _to_openai_tools(tool_defs)
+        openai_tools = _to_openai_tool_format(tool_defs)
         assert len(openai_tools) == 1
         assert openai_tools[0]["type"] == "function"
         assert openai_tools[0]["function"]["name"] == "get_file"
         assert "path" in openai_tools[0]["function"]["parameters"]["properties"]
 
     def test_empty_tools(self):
-        assert _to_openai_tools([]) == []
+        assert _to_openai_tool_format([]) == []
 
     def test_tool_without_input_schema(self):
         tools = [{"name": "ping", "description": "ping"}]
-        result = _to_openai_tools(tools)
+        result = _to_openai_tool_format(tools)
         assert result[0]["function"]["parameters"] == {
             "type": "object", "properties": {}
         }
@@ -432,7 +438,7 @@ class TestWebhook:
         os.environ["NVIDIA_API_KEY"]        = "test-nvidia-key"
         os.environ["GEMINI_API_KEY"]        = "test-gemini-key"
 
-        from platform.webhook import app
+        from server.webhook import app
         self.client = TestClient(app, raise_server_exceptions=False)
         self.secret = "test-secret"
 

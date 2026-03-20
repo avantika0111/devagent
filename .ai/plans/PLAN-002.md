@@ -9,7 +9,7 @@
 - `agents/architect_agent.py`  (new — architecture validation, violation flagging)
 - `agents/ask_agent.py`        (new — Q&A grounded in .ai/ context, loads all rules)
 - `agents/__init__.py`         (update — export new agents)
-- `platform/orchestrator.py`   (update — real plan → approval → architect cycle)
+- `server/orchestrator.py`   (update — real plan → approval → architect cycle)
 - `cli/main.py`                (update — wire devagent task, plan, ask to real agents)
 - `tests/test_agents/test_phase2.py` (new — agent unit tests and orchestrator cycle tests)
 - `tests/test_agents/__init__.py`    (new)
@@ -19,7 +19,7 @@
 2. Create `agents/architect_agent.py` — tools: read_plan, read_rule, read_file, flag_violation, approve_plan, request_revision
 3. Add approve_plan safety override — cannot approve when blocking violations exist in memory
 4. Create `agents/ask_agent.py` — override build_full_context() to load all rule files
-5. Update `platform/orchestrator.py` — implement plan → approval → architect cycle with OrchestratorResult
+5. Update `server/orchestrator.py` — implement plan → approval → architect cycle with OrchestratorResult
 6. Wire `devagent task`, `devagent plan`, `devagent ask` to real agents in CLI
 7. Write Phase 2 tests — tool execution, full agent runs with mocked API, orchestrator cycle
 

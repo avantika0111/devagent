@@ -413,7 +413,7 @@ devagent/
 ├── cli/
 │   └── main.py               # devagent task / plan / ask / review / scan
 │
-├── platform/
+├── server/
 │   ├── webhook.py            # FastAPI webhook listener
 │   ├── orchestrator.py       # agent cycle coordinator
 │   └── reporter.py           # unified output formatter

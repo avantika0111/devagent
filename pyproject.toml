@@ -47,7 +47,7 @@ devagent = "cli.main:app"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["core*", "agents*", "platform*", "cli*"]
+include = ["core*", "agents*", "server*", "cli*"]
 
 # ---------------------------------------------------------------------------
 # Pytest
@@ -66,7 +66,7 @@ addopts          = "-v --tb=short"
 # ---------------------------------------------------------------------------
 
 [tool.coverage.run]
-source = ["core", "agents", "platform", "cli"]
+source = ["core", "agents", "server", "cli"]
 omit   = ["tests/*", "**/__init__.py"]
 
 [tool.coverage.report]

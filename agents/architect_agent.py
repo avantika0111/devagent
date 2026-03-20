@@ -2,7 +2,7 @@
 agents/architect_agent.py
 
 Reviews the plan produced by plan_agent against architecture.md.
-Catches design violations before code is written — not after.
+Catches design violations before code is written - not after.
 
 Reads from memory:
     memory.get("plan_content")    the plan text
@@ -19,7 +19,7 @@ If violations are found:
     - Orchestrator can either halt or proceed with warnings
       depending on devagent.yml config
 
-The architect agent does NOT rewrite the plan — it flags issues
+The architect agent does NOT rewrite the plan - it flags issues
 and lets the plan_agent revise if needed. Clear separation of concerns.
 """
 
@@ -73,7 +73,7 @@ For every plan you review, check ALL of the following:
 **Layer boundaries**
 - Does any step put business logic in routes or controllers?
 - Does any step make database calls outside the repository layer?
-- Do steps respect the dependency direction? (routes → services → repositories)
+- Do steps respect the dependency direction? (routes -> services -> repositories)
 
 **Naming and structure**
 - Do new files follow the naming conventions in architecture.md?
@@ -83,7 +83,7 @@ For every plan you review, check ALL of the following:
 **Testing**
 - Is every new public function covered by a test file in the affected files list?
 - Are integration tests listed for every new route?
-- Does the plan follow TDD — tests listed before implementation steps?
+- Does the plan follow TDD - tests listed before implementation steps?
 
 **Security**
 - Does any step bypass authentication or input validation?
@@ -104,7 +104,7 @@ After reviewing ALL sections:
 Do NOT approve a plan with blocking violations (layer boundaries, missing tests,
 security bypasses). Flag them and request revision.
 
-Do NOT request revision for stylistic preferences — only for rule violations.
+Do NOT request revision for stylistic preferences - only for rule violations.
 Be precise: quote the specific rule being violated.
 """
 
@@ -167,7 +167,7 @@ Be precise: quote the specific rule being violated.
                         "title":       {"type": "string"},
                         "description": {
                             "type": "string",
-                            "description": "Specific violation — quote the rule being broken"
+                            "description": "Specific violation - quote the rule being broken"
                         },
                         "severity": {
                             "type": "string",
@@ -220,7 +220,7 @@ Be precise: quote the specific rule being violated.
             if not content:
                 return {
                     "found": False,
-                    "message": f"{tool_input['filename']} not found — apply general best practices"
+                    "message": f"{tool_input['filename']} not found - apply general best practices"
                 }
             return {"found": True, "content": content}
 
@@ -299,10 +299,10 @@ Be precise: quote the specific rule being violated.
         ]
 
         if blocking:
-            # Cannot approve with blocking violations — override to revision
+            # Cannot approve with blocking violations - override to revision
             logger.warning(
                 f"[{self.name}] Approval attempted with {len(blocking)} "
-                f"blocking violation(s) — overriding to request_revision"
+                f"blocking violation(s) - overriding to request_revision"
             )
             self.memory.set("architect_approved", False)
             self.memory.set("architect_verdict",  "needs_revision")
@@ -327,7 +327,7 @@ Be precise: quote the specific rule being violated.
 
         violation_count = len(self.memory.get_findings(agent=self.name))
         logger.warning(
-            f"[{self.name}] Plan needs revision — "
+            f"[{self.name}] Plan needs revision - "
             f"{violation_count} violation(s): {summary}"
         )
 

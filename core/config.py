@@ -2,7 +2,7 @@
 core/config.py
 
 Reads and validates the .ai/ directory structure.
-Resolves providers once at load time — keys are read from env vars here,
+Resolves providers once at load time - keys are read from env vars here,
 never inside the agent loop.
 
 The resolved_providers list is the only provider state agents ever read.
@@ -21,26 +21,26 @@ import yaml
 
 
 # ---------------------------------------------------------------------------
-# Provider config — resolved at load time, not at call time
+# Provider config - resolved at load time, not at call time
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
 class ProviderConfig:
     """
     A fully resolved provider. api_key is the actual value, not the env var name.
-    frozen=True — providers are immutable after config.load().
+    frozen=True - providers are immutable after config.load().
     """
     name:     str
     base_url: str
     model:    str
-    api_key:  str   # resolved value — empty string for keyless providers (Ollama)
+    api_key:  str   # resolved value - empty string for keyless providers (Ollama)
 
     def __repr__(self) -> str:
         masked = f"{self.api_key[:8]}..." if len(self.api_key) > 8 else "***"
         return f"Provider({self.name}, {self.model}, key={masked if self.api_key else 'none'})"
 
 
-# Known providers — base_url and key env var name by shorthand
+# Known providers - base_url and key env var name by shorthand
 _KNOWN: dict[str, dict[str, str]] = {
     "nvidia": {
         "base_url":    "https://integrate.api.nvidia.com/v1",
@@ -68,7 +68,7 @@ _KNOWN: dict[str, dict[str, str]] = {
         "model":       "qwen2.5-coder:14b",
     },
     "azure": {
-        "base_url":    "",   # must be set explicitly — resource-specific
+        "base_url":    "",   # must be set explicitly - resource-specific
         "api_key_env": "AZURE_OPENAI_API_KEY",
         "model":       "gpt-4o",
     },
@@ -86,7 +86,7 @@ def _resolve_providers(raw: list[dict]) -> list[ProviderConfig]:
     """
     Read env vars once. Build the resolved provider list.
     Providers with a missing required key are silently dropped.
-    Called once at config.load() — never again.
+    Called once at config.load() - never again.
 
     Each entry in raw can either:
       - name a known provider shorthand: {"name": "nvidia", "model": "..."}
@@ -103,7 +103,7 @@ def _resolve_providers(raw: list[dict]) -> list[ProviderConfig]:
         api_key_env = entry.get("api_key_env") if "api_key_env" in entry \
                       else known.get("api_key_env", "")
 
-        # Resolve key from env — single read, stored in the object
+        # Resolve key from env - single read, stored in the object
         api_key = os.environ.get(api_key_env, "").strip() if api_key_env else ""
 
         # Drop provider if key is required but not set
@@ -195,7 +195,7 @@ class DevAgentConfig:
     """
     Full parsed and resolved configuration for a project.
 
-    resolved_providers — the only provider field agents should read.
+    resolved_providers - the only provider field agents should read.
         Pre-built at load time. Immutable. Available providers only.
         Config order is preserved (first = highest priority).
     """
@@ -238,7 +238,7 @@ class DevAgentConfig:
         agents_cfg   = cls._load_agents_config(raw)
         max_iter     = raw.get("max_iterations_per_agent", 15)
 
-        # Resolve providers once — keys read from env here, never again
+        # Resolve providers once - keys read from env here, never again
         raw_providers      = raw.get("providers") or _DEFAULT_PROVIDERS
         resolved_providers = _resolve_providers(raw_providers)
 
@@ -386,7 +386,7 @@ TEMPLATES: dict[str, str] = {
 <!-- Hard constraints. DevAgent will not violate these. -->
 
 ## Current priorities
-<!-- What matters most right now — stability, performance, new features? -->
+<!-- What matters most right now - stability, performance, new features? -->
 """,
     "rules/architecture.md": """\
 # Architecture rules
@@ -463,9 +463,9 @@ TEMPLATES: dict[str, str] = {
     "devagent.yml": """\
 # DevAgent configuration
 #
-# Providers are tried in order — first one with a key set wins.
+# Providers are tried in order - first one with a key set wins.
 # Add, remove, or reorder providers based on what you have.
-# All providers use the OpenAI-compatible API — same client, different base_url.
+# All providers use the OpenAI-compatible API - same client, different base_url.
 
 providers:
   - name: nvidia
@@ -520,7 +520,7 @@ agents:
 
 def init_project(project_root: str | Path) -> list[Path]:
     """
-    Create the .ai/ scaffold. Skips existing files — safe to re-run.
+    Create the .ai/ scaffold. Skips existing files - safe to re-run.
     Returns list of files created.
     """
     root    = Path(project_root).resolve()

@@ -5,12 +5,12 @@
 **Status:** draft
 
 ## Affected files
-- `platform/orchestrator.py`      (update — retry, partial recovery, run history)
-- `platform/reporter.py`          (update — PR comment with full run summary)
+- `server/orchestrator.py`      (update — retry, partial recovery, run history)
+- `server/reporter.py`          (update — PR comment with full run summary)
 - `agents/dependency_agent.py`    (new — weekly dependency audit, upgrade PRs)
-- `platform/run_store.py`         (new — persists run history to .ai/runs/)
+- `server/run_store.py`         (new — persists run history to .ai/runs/)
 - `cli/main.py`                   (update — devagent runs, devagent retry)
-- `tests/test_platform/test_phase6.py` (new)
+- `tests/test_server/test_phase6.py` (new)
 
 ## Steps
 1. Update orchestrator with production hardening
@@ -26,7 +26,7 @@
    - Opens a single "Dependency upgrades" PR per week, not one per package
    - Commit message: "chore(deps): weekly dependency audit YYYY-MM-DD"
 
-3. Create `platform/run_store.py`
+3. Create `server/run_store.py`
    - Serialises MemoryStore summary to JSON after each run
    - Stored in `.ai/runs/` — committed alongside plans
    - `devagent runs` lists recent runs with stage and outcome

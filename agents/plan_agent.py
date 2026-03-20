@@ -6,7 +6,7 @@ Reads instruction.md + architecture.md + git.md before creating any plan.
 Writes a structured plan to .ai/plans/PLAN-XXX.md.
 Optionally waits for human approval before the orchestrator proceeds.
 
-The plan format is strict — every section is required.
+The plan format is strict - every section is required.
 The architect agent reads this file. The TDD agent reads this file.
 Every agent downstream depends on a complete, well-structured plan.
 
@@ -59,12 +59,12 @@ bad implementations. Take your time.
 
 1. Read the relevant rule files to understand project conventions.
 2. Read existing source files that will be affected by this task.
-3. Identify ALL files that need to change — including tests.
+3. Identify ALL files that need to change - including tests.
 4. Break the work into clear, ordered steps.
 5. Flag any risks or uncertainties.
 6. Write the plan using write_plan.
 
-## Plan format (strict — every section required)
+## Plan format (strict - every section required)
 
 ```
 # Plan: {short title}
@@ -74,30 +74,30 @@ bad implementations. Take your time.
 **Status:** draft
 
 ## Affected files
-- path/to/file.py   (action — what changes)
-- path/to/test.py   (new — what it tests)
+- path/to/file.py   (action - what changes)
+- path/to/test.py   (new - what it tests)
 
 ## Steps
-1. First step — specific and actionable
+1. First step - specific and actionable
 2. Second step
 ...
 
 ## Rules checked
-- architecture.md: {which rules apply and how} ✓
-- git.md: {branch name} ✓
-- testing.md: {test requirements} ✓
-- security.md: {security considerations} ✓
+- architecture.md: {which rules apply and how} [ok]
+- git.md: {branch name} [ok]
+- testing.md: {test requirements} [ok]
+- security.md: {security considerations} [ok]
 
 ## Risks
-- Risk description — mitigation approach
+- Risk description - mitigation approach
 (write "None identified" if no risks)
 ```
 
 ## Critical rules
-- Never skip the "Rules checked" section — always verify against project rules.
-- Never skip tests — every new function needs a corresponding test file listed.
-- Steps must be ordered — later steps must not depend on earlier ones being skipped.
-- Call write_plan exactly once at the end — not before you have all sections complete.
+- Never skip the "Rules checked" section - always verify against project rules.
+- Never skip tests - every new function needs a corresponding test file listed.
+- Steps must be ordered - later steps must not depend on earlier ones being skipped.
+- Call write_plan exactly once at the end - not before you have all sections complete.
 - If you cannot determine something, flag it as a risk rather than guessing.
 """
 
@@ -233,7 +233,7 @@ bad implementations. Take your time.
         if not content:
             return {
                 "found": False,
-                "message": f"{filename} not found in .ai/rules/ — proceed with general best practices"
+                "message": f"{filename} not found in .ai/rules/ - proceed with general best practices"
             }
         return {"found": True, "filename": filename, "content": content}
 
@@ -242,14 +242,14 @@ bad implementations. Take your time.
         full_path    = project_root / path
 
         if not full_path.exists():
-            return {"found": False, "path": path, "message": "File does not exist — will be created"}
+            return {"found": False, "path": path, "message": "File does not exist - will be created"}
 
         if not full_path.is_file():
             raise ToolError(f"Path is a directory, not a file: {path}")
 
         try:
             content = full_path.read_text(encoding="utf-8")
-            # Truncate very large files — agent doesn't need the full content for planning
+            # Truncate very large files - agent doesn't need the full content for planning
             if len(content) > 8000:
                 content = content[:8000] + f"\n\n... (truncated, {len(content)} chars total)"
             return {"found": True, "path": path, "content": content}
@@ -309,7 +309,7 @@ bad implementations. Take your time.
 
 
 # ---------------------------------------------------------------------------
-# Approval gate — called by orchestrator after plan_agent finishes
+# Approval gate - called by orchestrator after plan_agent finishes
 # ---------------------------------------------------------------------------
 
 def request_approval(plan_path: Path, require_approval: bool) -> bool:
@@ -327,12 +327,12 @@ def request_approval(plan_path: Path, require_approval: bool) -> bool:
 
     plan_content = plan_path.read_text(encoding="utf-8")
 
-    # Non-interactive (CI / webhook trigger) — auto-approve
+    # Non-interactive (CI / webhook trigger) - auto-approve
     if not sys.stdin.isatty() or not require_approval:
         logger.info(f"Auto-approving plan: {plan_path.name}")
         return True
 
-    # Interactive — show plan and ask
+    # Interactive - show plan and ask
     print("\n" + "=" * 60)
     print(plan_content)
     print("=" * 60)

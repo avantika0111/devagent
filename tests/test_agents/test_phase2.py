@@ -97,9 +97,14 @@ class TestPlanAgent:
         assert result["plan_id"] == "PLAN-001"
         assert result["status"]  == "written"
 
-        assert memory.get("plan_id")       == "PLAN-001"
-        assert memory.get("plan_title")    == "Add auth"
-        assert "affected_files" in str(memory.get("affected_files"))
+        assert memory.get("plan_id")    == "PLAN-001"
+        assert memory.get("plan_title") == "Add auth"
+
+        # affected_files is stored as a list — check list contents directly
+        affected = memory.get("affected_files")
+        assert isinstance(affected, list)
+        assert "auth.py" in affected
+        assert "tests/test_auth.py" in affected
 
         plan_path = memory.get("plan_path")
         assert plan_path.exists()
@@ -209,7 +214,7 @@ class TestArchitectAgent:
         agent.execute_tool("flag_violation", {
             "violation_type": "layer_boundary",
             "title":          "Route calls repository directly",
-            "description":    "routes/user.py calls UserRepository — must go through service",
+            "description":    "routes/user.py calls UserRepository - must go through service",
             "severity":       "high",
             "suggestion":     "Add UserService.get_user() and call that from the route",
         })
@@ -387,7 +392,7 @@ class TestOrchestratorPhase2:
 
     def test_run_task_plan_failure_stops_pipeline(self, config, tmp_ai_dir, monkeypatch):
         """If plan agent fails, orchestrator returns failure at plan stage."""
-        from platform.orchestrator import Orchestrator
+        from server.orchestrator import Orchestrator
         monkeypatch.setenv("NVIDIA_API_KEY", "")
         monkeypatch.setenv("GEMINI_API_KEY", "AIza-test")
 
@@ -405,7 +410,7 @@ class TestOrchestratorPhase2:
     ):
         """If architect rejects, orchestrator stops at architect stage."""
         import json
-        from platform.orchestrator import Orchestrator
+        from server.orchestrator import Orchestrator
         monkeypatch.setenv("NVIDIA_API_KEY", "")
         monkeypatch.setenv("GEMINI_API_KEY", "AIza-test")
 
@@ -413,7 +418,7 @@ class TestOrchestratorPhase2:
         tc_plan = _make_tool_call("c1", "write_plan", json.dumps({
             "title":          "Add auth",
             "content":        "# Plan: Add auth\n**Task:** Add JWT\n",
-            "affected_files": ["routes/auth.py"]   # missing tests — architect will catch this
+            "affected_files": ["routes/auth.py"]   # missing tests - architect will catch this
         }))
         # Architect agent: flag violation and request revision
         tc_read = _make_tool_call("c2", "read_plan", "{}")

@@ -1,18 +1,18 @@
 """
-platform/orchestrator.py
+server/orchestrator.py
 
 Coordinates agents for a task or PR event.
 
-Phase 2 cycle (plan → architect):
-    1. PlanAgent    — creates .ai/plans/PLAN-XXX.md
-    2. Approval     — shows plan to developer, waits if interactive
-    3. ArchitectAgent — validates plan against architecture rules
-    4. Decision     — proceed or halt based on architect verdict
+Phase 2 cycle (plan -> architect):
+    1. PlanAgent    - creates .ai/plans/PLAN-XXX.md
+    2. Approval     - shows plan to developer, waits if interactive
+    3. ArchitectAgent - validates plan against architecture rules
+    4. Decision     - proceed or halt based on architect verdict
 
 Phase 3+ will add TDD, implement, security, review, GitHub, Docker.
 
 The orchestrator owns the MemoryStore for each run.
-All agents share the same memory instance — findings accumulate.
+All agents share the same memory instance - findings accumulate.
 """
 
 from __future__ import annotations
@@ -34,8 +34,8 @@ class Orchestrator:
     Routes tasks through the agent pipeline.
 
     Two entry points:
-        run_task()   — triggered by CLI (devagent task "...")
-        run_on_pr()  — triggered by GitHub webhook
+        run_task()   - triggered by CLI (devagent task "...")
+        run_on_pr()  - triggered by GitHub webhook
     """
 
     def __init__(self, project_root: str | Path = "."):
@@ -43,7 +43,7 @@ class Orchestrator:
         self.project_root = Path(project_root).resolve()
 
     # ------------------------------------------------------------------
-    # CLI entry point — devagent task "..."
+    # CLI entry point - devagent task "..."
     # ------------------------------------------------------------------
 
     def run_task(self, task: str) -> OrchestratorResult:
@@ -58,10 +58,10 @@ class Orchestrator:
 
         logger.info(f"Starting task: {task}")
         logger.info(
-            f"Providers: {' → '.join(p.name for p in self.config.resolved_providers)}"
+            f"Providers: {' -> '.join(p.name for p in self.config.resolved_providers)}"
         )
 
-        # ── Step 1: Plan ──────────────────────────────────────────────
+        # -- Step 1: Plan ----------------------------------------------
         plan_result = self._run_plan_agent(task, memory)
         if not plan_result.success:
             return OrchestratorResult(
@@ -73,7 +73,7 @@ class Orchestrator:
 
         plan_path = memory.get("plan_path")
 
-        # ── Step 2: Approval gate ─────────────────────────────────────
+        # -- Step 2: Approval gate -------------------------------------
         from agents.plan_agent import request_approval
         approved = request_approval(
             plan_path=plan_path,
@@ -87,7 +87,7 @@ class Orchestrator:
                 memory=memory,
             )
 
-        # ── Step 3: Architect review ──────────────────────────────────
+        # -- Step 3: Architect review ----------------------------------
         arch_result = self._run_architect_agent(memory)
         if not arch_result.success:
             return OrchestratorResult(
@@ -109,7 +109,7 @@ class Orchestrator:
                 memory=memory,
             )
 
-        # ── Phase 3+ agents go here ───────────────────────────────────
+        # -- Phase 3+ agents go here -----------------------------------
         logger.info(
             f"Plan '{memory.get('plan_id')}' approved by architect. "
             f"TDD agent runs in Phase 3."
@@ -124,7 +124,7 @@ class Orchestrator:
         )
 
     # ------------------------------------------------------------------
-    # Webhook entry point — GitHub PR event
+    # Webhook entry point - GitHub PR event
     # ------------------------------------------------------------------
 
     async def run_on_pr(
@@ -164,7 +164,7 @@ class Orchestrator:
         if not plan_result.success:
             github.post_comment(
                 pr_number,
-                f"## DevAgent\n\n⚠️ Plan agent failed: {plan_result.error}"
+                f"## DevAgent\n\n[!] Plan agent failed: {plan_result.error}"
             )
             return
 
@@ -255,7 +255,7 @@ class OrchestratorResult:
 def _print_violations(violations) -> None:
     if not violations:
         return
-    print("\n⚠️  Architect found violations:\n")
+    print("\n[!]  Architect found violations:\n")
     for v in violations:
         print(f"  [{v.severity.upper()}] {v.title}")
         print(f"  {v.description}")
@@ -270,11 +270,11 @@ def _build_pr_comment(memory: MemoryStore, architect_approved: bool) -> str:
     violations = memory.get_findings(agent="architect_agent")
     risks      = memory.get_findings(agent="plan_agent")
 
-    verdict_emoji = "✅" if architect_approved else "⚠️"
+    verdict_emoji = "[ok]" if architect_approved else "[!]"
     verdict_label = "Approved" if architect_approved else "Needs revision"
 
     lines = [
-        f"## DevAgent — {plan_id}",
+        f"## DevAgent - {plan_id}",
         f"",
         f"### Plan: {plan_title}",
         f"",
@@ -285,7 +285,7 @@ def _build_pr_comment(memory: MemoryStore, architect_approved: bool) -> str:
     if violations:
         lines.append("### Architecture violations")
         for v in violations:
-            emoji = "🔴" if v.severity.value in ("critical", "high") else "🟡"
+            emoji = "[HIGH]" if v.severity.value in ("critical", "high") else "[MED]"
             lines.append(f"{emoji} **{v.title}**")
             lines.append(f"   {v.description}")
             if v.suggestion:
@@ -304,6 +304,6 @@ def _build_pr_comment(memory: MemoryStore, architect_approved: bool) -> str:
 
     lines.append("")
     lines.append("---")
-    lines.append("*DevAgent Phase 2 — TDD and implementation coming in Phase 3*")
+    lines.append("*DevAgent Phase 2 - TDD and implementation coming in Phase 3*")
 
     return "\n".join(lines)

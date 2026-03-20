@@ -7,8 +7,8 @@
 ## Affected files
 - `agents/github_agent.py`     (new — branch, commit, PR creation following git.md)
 - `agents/__init__.py`         (update)
-- `platform/orchestrator.py`   (update — add GitHub stage, complete the cycle)
-- `platform/reporter.py`       (new — builds unified PR comment from all agent findings)
+- `server/orchestrator.py`   (update — add GitHub stage, complete the cycle)
+- `server/reporter.py`       (new — builds unified PR comment from all agent findings)
 - `cli/main.py`                (update — all stub commands now real)
 - `tests/test_agents/test_phase5.py` (new)
 
@@ -21,7 +21,7 @@
    - PR body references the plan: "Implements .ai/plans/PLAN-XXX.md"
    - PR title matches commit format
 
-2. Create `platform/reporter.py`
+2. Create `server/reporter.py`
    - Reads all findings from MemoryStore across all agents
    - Groups by agent: plan risks, architect violations, security findings, review issues
    - Formats as single unified Markdown PR comment

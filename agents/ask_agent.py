@@ -4,10 +4,10 @@ agents/ask_agent.py
 Answers questions about the project grounded in .ai/ context.
 Used by: devagent ask "why do we use repositories?"
 
-This agent is read-only — it never writes files or modifies memory.
+This agent is read-only - it never writes files or modifies memory.
 It loads ALL rules (not just agent-specific ones) to answer any question.
 
-Simpler than plan/architect — no tools needed for basic questions,
+Simpler than plan/architect - no tools needed for basic questions,
 but can read files when the question requires it.
 """
 
@@ -37,7 +37,7 @@ class AskAgent(BaseAgent):
         return """\
 You are a knowledgeable assistant for this specific project.
 
-Answer questions using the project context provided — instruction.md,
+Answer questions using the project context provided - instruction.md,
 rules, language conventions, and framework conventions.
 
 Rules:
@@ -110,7 +110,7 @@ Rules:
 
     def build_full_context(self) -> str:
         """
-        Override context building — ask agent loads ALL rules, not just its own.
+        Override context building - ask agent loads ALL rules, not just its own.
         A question could be about any domain.
         """
         sections = ["## Project instruction\n\n" + self.config.instruction]

@@ -11,8 +11,8 @@
 - `core/github_client.py`     (new — GitHub API wrapper used by all agents)
 - `core/logging_config.py`    (new — structured logging setup)
 - `core/__init__.py`          (new — package exports)
-- `platform/webhook.py`       (new — FastAPI listener, HMAC signature verification)
-- `platform/orchestrator.py`  (new — skeleton, posts acknowledgement comment on PR)
+- `server/webhook.py`       (new — FastAPI listener, HMAC signature verification)
+- `server/orchestrator.py`  (new — skeleton, posts acknowledgement comment on PR)
 - `cli/main.py`               (new — devagent init, devagent status, stub commands)
 - `devagent.yml`              (new — project-level provider and agent config)
 - `.ai/devagent.yml`          (new — .ai/ template written by devagent init)
@@ -31,8 +31,8 @@
 3. Create `core/github_client.py` — GitHubClient with typed return dataclasses
 4. Create `core/base_agent.py` — BaseAgent with provider chain (NIM → Gemini), pre-built clients, circuit breaker
 5. Create `core/logging_config.py` — setup_logging()
-6. Create `platform/webhook.py` — FastAPI app, /health, /webhook with HMAC verification
-7. Create `platform/orchestrator.py` — skeleton that receives PR events and posts acknowledgement
+6. Create `server/webhook.py` — FastAPI app, /health, /webhook with HMAC verification
+7. Create `server/orchestrator.py` — skeleton that receives PR events and posts acknowledgement
 8. Create `cli/main.py` — devagent init, devagent status, devagent plans, stub commands
 9. Create project files — requirements.txt, pyproject.toml, Dockerfile, docker-compose.yml
 10. Write tests for all core modules

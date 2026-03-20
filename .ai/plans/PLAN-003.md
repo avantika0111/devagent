@@ -8,7 +8,7 @@
 - `agents/tdd_agent.py`        (new — coverage analysis, test generation, implementation, self-verification)
 - `agents/review_agent.py`     (new — cross-domain review against architecture + testing + security rules)
 - `agents/__init__.py`         (update — export new agents)
-- `platform/orchestrator.py`   (update — extend cycle: architect → TDD → review)
+- `server/orchestrator.py`   (update — extend cycle: architect → TDD → review)
 - `cli/main.py`                (update — wire devagent review)
 - `tests/test_agents/test_phase3.py` (new)
 

@@ -2,7 +2,7 @@
 core/github_client.py
 
 Single GitHub API wrapper used by every agent.
-All agents import this — none of them import PyGithub directly.
+All agents import this - none of them import PyGithub directly.
 
 This means GitHub API logic lives in one place.
 If the API changes or you swap libraries, you update one file.
@@ -104,7 +104,7 @@ class GitHubClient:
         self.repo_name = repo
 
     # ------------------------------------------------------------------
-    # Pull request — read
+    # Pull request - read
     # ------------------------------------------------------------------
 
     def get_pr_info(self, pr_number: int) -> PRInfo:
@@ -157,11 +157,11 @@ class GitHubClient:
         return "\n\n".join(sections)
 
     def get_pr_changed_filenames(self, pr_number: int) -> list[str]:
-        """Quick list of filenames changed in a PR — no diff content."""
+        """Quick list of filenames changed in a PR - no diff content."""
         return [f.filename for f in self.get_pr_files(pr_number)]
 
     # ------------------------------------------------------------------
-    # Pull request — write
+    # Pull request - write
     # ------------------------------------------------------------------
 
     def post_comment(self, pr_number: int, body: str) -> None:
@@ -188,7 +188,7 @@ class GitHubClient:
             side:        "RIGHT" for new code, "LEFT" for removed code
         """
         pr = self._get_pr(pr_number)
-        # Get the latest commit on the PR head — required for review comments
+        # Get the latest commit on the PR head - required for review comments
         commit = list(pr.get_commits())[-1]
 
         try:
@@ -233,7 +233,7 @@ class GitHubClient:
         try:
             self._repo.get_label(label)
         except GithubException:
-            # Label doesn't exist yet — create it
+            # Label doesn't exist yet - create it
             self._repo.create_label(label, color="ededed")
         self._retry(lambda: pr.add_to_labels(label))
 
@@ -260,7 +260,7 @@ class GitHubClient:
         return PRResult(number=pr.number, url=pr.html_url, title=pr.title)
 
     # ------------------------------------------------------------------
-    # Files — read
+    # Files - read
     # ------------------------------------------------------------------
 
     def get_file(self, file_path: str, branch: str = "main") -> FileContent:
@@ -333,7 +333,7 @@ class GitHubClient:
         return sorted(paths)
 
     # ------------------------------------------------------------------
-    # Files — write
+    # Files - write
     # ------------------------------------------------------------------
 
     def commit_file(
@@ -347,13 +347,13 @@ class GitHubClient:
         Create or update a file on a branch.
 
         Handles both new files (create) and existing files (update) transparently.
-        Content is a plain string — encoding is handled internally.
+        Content is a plain string - encoding is handled internally.
         """
         encoded = content.encode("utf-8")
 
         try:
             existing = self.get_file(file_path, branch)
-            # File exists — update it
+            # File exists - update it
             result = self._retry(lambda: self._repo.update_file(
                 path=file_path,
                 message=commit_message,
@@ -362,7 +362,7 @@ class GitHubClient:
                 branch=branch,
             ))
         except GitHubClientError:
-            # File doesn't exist — create it
+            # File doesn't exist - create it
             result = self._retry(lambda: self._repo.create_file(
                 path=file_path,
                 message=commit_message,
@@ -427,7 +427,7 @@ class GitHubClient:
     def get_repo_languages(self) -> dict[str, int]:
         """
         Get languages used in the repo (from GitHub's detection).
-        Returns dict of language → byte count, e.g. {"Python": 42000, "YAML": 1200}
+        Returns dict of language -> byte count, e.g. {"Python": 42000, "YAML": 1200}
         """
         return dict(self._repo.get_languages())
 
@@ -469,7 +469,7 @@ class GitHubClient:
                 status = e.status if hasattr(e, "status") else 0
 
                 if status == 403:
-                    # Rate limited — check reset time
+                    # Rate limited - check reset time
                     reset_time = e.headers.get("X-RateLimit-Reset") if hasattr(e, "headers") else None
                     if reset_time:
                         wait = max(0, int(reset_time) - int(time.time())) + 1
@@ -479,7 +479,7 @@ class GitHubClient:
                     continue
 
                 if status in (500, 502, 503, 504) and attempt < max_attempts - 1:
-                    # Transient server error — retry with backoff
+                    # Transient server error - retry with backoff
                     time.sleep(base_delay * (2 ** attempt))
                     continue
 
@@ -495,14 +495,14 @@ class GitHubClient:
 class GitHubClientError(Exception):
     """
     All GitHub errors are re-raised as GitHubClientError.
-    Agents catch this — not GithubException directly.
+    Agents catch this - not GithubException directly.
     This decouples agents from PyGithub's exception hierarchy.
     """
     pass
 
 
 # ---------------------------------------------------------------------------
-# Factory — reads token from environment
+# Factory - reads token from environment
 # ---------------------------------------------------------------------------
 
 def create_github_client(repo: str) -> GitHubClient:

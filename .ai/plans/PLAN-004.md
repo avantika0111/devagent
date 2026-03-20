@@ -8,7 +8,7 @@
 - `agents/security_agent.py`   (new — secrets scan, semgrep OWASP, pip-audit CVEs, security.md rules)
 - `agents/docker_agent.py`     (new — docker build, container start, health check verification)
 - `agents/__init__.py`         (update)
-- `platform/orchestrator.py`   (update — add security and docker stages)
+- `server/orchestrator.py`   (update — add security and docker stages)
 - `cli/main.py`                (update — wire devagent scan, devagent docker check)
 - `tests/test_agents/test_phase4.py` (new)
 

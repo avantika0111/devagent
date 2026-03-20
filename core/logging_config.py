@@ -25,7 +25,7 @@ def setup_logging() -> None:
     level_name = os.environ.get("DEVAGENT_LOG_LEVEL", "INFO").upper()
     level      = getattr(logging, level_name, logging.INFO)
 
-    fmt     = "%(asctime)s · %(levelname)-8s · %(name)s · %(message)s"
+    fmt     = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
     datefmt = "%Y-%m-%dT%H:%M:%SZ"
 
     handler = logging.StreamHandler(sys.stdout)

@@ -2,7 +2,7 @@
 conftest.py
 
 Shared pytest fixtures available to every test file.
-pytest discovers this automatically — no imports needed.
+pytest discovers this automatically - no imports needed.
 """
 
 from __future__ import annotations
@@ -22,12 +22,15 @@ from core.memory import Finding, MemoryStore, Severity
 def set_test_env(monkeypatch):
     """
     Set required environment variables for every test.
-    Uses placeholder values — mocks handle actual API calls.
+    Uses placeholder values - mocks handle actual API calls.
+    Forces UTF-8 encoding so tests pass on Windows (cp1252 default).
     """
     monkeypatch.setenv("NVIDIA_API_KEY",         "test-nvidia-key")
     monkeypatch.setenv("GEMINI_API_KEY",         "test-gemini-key")
     monkeypatch.setenv("GITHUB_TOKEN",           "test-github-token")
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET",  "test-webhook-secret")
+    monkeypatch.setenv("PYTHONIOENCODING",       "utf-8")
+    monkeypatch.setenv("PYTHONUTF8",             "1")
 
 
 # ---------------------------------------------------------------------------
@@ -82,7 +85,7 @@ def tmp_ai_dir(tmp_path: Path) -> Path:
     (rules / "testing.md").write_text("# Testing\n\npytest only. Minimum 85% coverage.")
     (rules / "security.md").write_text("# Security\n\nNo secrets in code. Use environment variables.")
     (rules / "docker.md").write_text("# Docker\n\nMulti-stage builds. Non-root user.")
-    (rules / "ci-cd.md").write_text("# CI/CD\n\nLint → test → scan → build → deploy.")
+    (rules / "ci-cd.md").write_text("# CI/CD\n\nLint -> test -> scan -> build -> deploy.")
 
     languages = ai_dir / "languages"
     languages.mkdir()
@@ -94,7 +97,7 @@ def tmp_ai_dir(tmp_path: Path) -> Path:
 
     (ai_dir / "plans").mkdir()
 
-    # devagent.yml — providers list format
+    # devagent.yml - providers list format
     (ai_dir / "devagent.yml").write_text(
         "providers:\n"
         "  - name: nvidia\n"

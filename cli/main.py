@@ -1,7 +1,7 @@
 """
 cli/main.py
 
-DevAgent CLI — the developer's interface.
+DevAgent CLI - the developer's interface.
 
 Phase 1 commands:
     devagent init     initialise .ai/ in a project
@@ -33,7 +33,7 @@ setup_logging()
 
 app = typer.Typer(
     name="devagent",
-    help="AI coding assistant — plans, tests, implements, reviews.",
+    help="AI coding assistant - plans, tests, implements, reviews.",
     add_completion=False,
 )
 console = Console()
@@ -56,7 +56,7 @@ def init(
     Creates the .ai/ directory with template files for:
         instruction.md, rules/, languages/, frameworks/, devagent.yml
 
-    Safe to re-run — existing files are never overwritten.
+    Safe to re-run - existing files are never overwritten.
     """
     project_root = Path(path).resolve()
 
@@ -69,21 +69,21 @@ def init(
     created = init_project(project_root)
 
     if not created:
-        console.print("[yellow].ai/ already exists — nothing to create.[/yellow]")
+        console.print("[yellow].ai/ already exists - nothing to create.[/yellow]")
         console.print("Edit your existing files to update the configuration.\n")
         raise typer.Exit(0)
 
     console.print("[green]Created:[/green]")
     for f in created:
         relative = f.relative_to(project_root)
-        console.print(f"  [dim]•[/dim] {relative}")
+        console.print(f"  [dim]-[/dim] {relative}")
 
     console.print()
     console.print("[bold]Next steps:[/bold]")
-    console.print("  1. Fill in [cyan].ai/instruction.md[/cyan] — describe your project")
-    console.print("  2. Fill in [cyan].ai/rules/[/cyan] files — your project's conventions")
+    console.print("  1. Fill in [cyan].ai/instruction.md[/cyan] - describe your project")
+    console.print("  2. Fill in [cyan].ai/rules/[/cyan] files - your project's conventions")
     console.print("  3. Set [cyan]NVIDIA_API_KEY[/cyan] (build.nvidia.com) or")
-    console.print("     [cyan]GEMINI_API_KEY[/cyan] (aistudio.google.com — free) in .env")
+    console.print("     [cyan]GEMINI_API_KEY[/cyan] (aistudio.google.com - free) in .env")
     console.print("  4. Set [cyan]GITHUB_TOKEN[/cyan] in .env")
     console.print("  5. Run [cyan]devagent status[/cyan] to verify the config\n")
 
@@ -110,7 +110,7 @@ def status(
         rprint(f"\n[red]{e}[/red]\n")
         raise typer.Exit(1)
 
-    console.print(f"\n[bold]DevAgent status[/bold] — {project_root}\n")
+    console.print(f"\n[bold]DevAgent status[/bold] - {project_root}\n")
 
     # Provider info
     if config.resolved_providers:
@@ -118,14 +118,14 @@ def status(
             label = "Primary  " if i == 0 else f"Fallback {i}"
             console.print(f"  {label}:       [cyan]{p.name}[/cyan] / [cyan]{p.model}[/cyan]")
     else:
-        console.print("  [red]No providers available — check your API keys in .env[/red]")
+        console.print("  [red]No providers available - check your API keys in .env[/red]")
     console.print(f"  Max iterations:   [cyan]{config.max_iterations}[/cyan]")
     console.print()
 
     # instruction.md preview
     preview = config.instruction[:120].replace("\n", " ")
     if len(config.instruction) > 120:
-        preview += "…"
+        preview += "..."
     console.print(f"  [bold]instruction.md[/bold]")
     console.print(f"  [dim]{preview}[/dim]\n")
 
@@ -142,9 +142,9 @@ def status(
     for rule_file in expected:
         if rule_file in config.rules:
             preview_text = config.rules[rule_file][:60].replace("\n", " ")
-            rules_table.add_row(rule_file, "✓ found", preview_text + "…")
+            rules_table.add_row(rule_file, "[ok] found", preview_text + "...")
         else:
-            rules_table.add_row(rule_file, "[yellow]⚠ missing[/yellow]", "")
+            rules_table.add_row(rule_file, "[yellow]! missing[/yellow]", "")
 
     console.print(rules_table)
     console.print()
@@ -157,7 +157,7 @@ def status(
     plan_list = config.list_plans()
     console.print(f"\n  [bold]Plans:[/bold] {len(plan_list)} in .ai/plans/")
     for p in plan_list[-3:]:
-        console.print(f"    [dim]•[/dim] {p.name}")
+        console.print(f"    [dim]-[/dim] {p.name}")
     console.print()
 
 
@@ -188,7 +188,7 @@ def plans(
 
 
 # ---------------------------------------------------------------------------
-# Stub commands — implemented in later phases
+# Stub commands - implemented in later phases
 # ---------------------------------------------------------------------------
 
 @app.command()
@@ -196,8 +196,8 @@ def task(
     description: str = typer.Argument(..., help="What to build or fix"),
     path: str = typer.Option(".", "--path", "-p", help="Project directory"),
 ):
-    """Run the full agent cycle — plan, architect review, then implement."""
-    from platform.orchestrator import Orchestrator
+    """Run the full agent cycle - plan, architect review, then implement."""
+    from server.orchestrator import Orchestrator
 
     try:
         orch   = Orchestrator(project_root=path)
@@ -207,12 +207,12 @@ def task(
         raise typer.Exit(1)
 
     if result.success:
-        rprint(f"\n[green]✓ Plan approved:[/green] {result.plan_id}")
+        rprint(f"\n[green][ok] Plan approved:[/green] {result.plan_id}")
         if result.plan_path:
             rprint(f"  [dim]{result.plan_path}[/dim]")
         rprint("\n[yellow]TDD agent runs in Phase 3.[/yellow]")
     else:
-        rprint(f"\n[red]✗ Stopped at stage '{result.stage}'[/red]")
+        rprint(f"\n[red][x] Stopped at stage '{result.stage}'[/red]")
         if result.error:
             rprint(f"  [dim]{result.error}[/dim]")
         raise typer.Exit(1)
@@ -223,8 +223,8 @@ def plan(
     description: str = typer.Argument(..., help="What to plan"),
     path: str = typer.Option(".", "--path", "-p", help="Project directory"),
 ):
-    """Generate a plan only — no implementation."""
-    from platform.orchestrator import Orchestrator
+    """Generate a plan only - no implementation."""
+    from server.orchestrator import Orchestrator
     from agents.plan_agent import request_approval
 
     try:
@@ -255,7 +255,7 @@ def ask(
     question: str = typer.Argument(..., help="Question about your project"),
     path: str = typer.Option(".", "--path", "-p", help="Project directory"),
 ):
-    """Ask a question — answer grounded in your .ai/ context."""
+    """Ask a question - answer grounded in your .ai/ context."""
     from agents.ask_agent import AskAgent
     from core.memory import MemoryStore
 

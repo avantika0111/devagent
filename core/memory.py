@@ -2,7 +2,7 @@
 core/memory.py
 
 Per-task memory store. Instantiated fresh for every DevAgent run.
-Tracks tool calls, findings, and agent lifecycle — never shared across tasks.
+Tracks tool calls, findings, and agent lifecycle - never shared across tasks.
 
 Usage:
     memory = MemoryStore(task_id="PLAN-001", repo="you/project")
@@ -103,7 +103,7 @@ class ToolCall:
 class Finding:
     """
     A single structured finding from any agent.
-    Code review, security, architecture — all write the same shape.
+    Code review, security, architecture - all write the same shape.
     The reporter reads findings at the end to build unified output.
     """
     id:          str
@@ -369,7 +369,7 @@ class MemoryStore:
         return {name: run.status.value for name, run in self._agent_runs.items()}
 
     def summary(self) -> dict[str, Any]:
-        """Full audit trail — written to .ai/plans/ at task completion."""
+        """Full audit trail - written to .ai/plans/ at task completion."""
         findings_by_severity: dict[str, int] = {}
         for f in self._findings:
             findings_by_severity[f.severity.value] = (
