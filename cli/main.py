@@ -192,22 +192,87 @@ def plans(
 # ---------------------------------------------------------------------------
 
 @app.command()
-def task(description: str = typer.Argument(..., help="What to build or fix")):
-    """[Phase 6] Run the full agent cycle — plan, test, implement, review, PR."""
-    rprint("[yellow]'devagent task' is coming in Phase 6.[/yellow]")
-    rprint(f"Task: [dim]{description}[/dim]")
+def task(
+    description: str = typer.Argument(..., help="What to build or fix"),
+    path: str = typer.Option(".", "--path", "-p", help="Project directory"),
+):
+    """Run the full agent cycle — plan, architect review, then implement."""
+    from platform.orchestrator import Orchestrator
+
+    try:
+        orch   = Orchestrator(project_root=path)
+        result = orch.run_task(description)
+    except FileNotFoundError as e:
+        rprint(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+
+    if result.success:
+        rprint(f"\n[green]✓ Plan approved:[/green] {result.plan_id}")
+        if result.plan_path:
+            rprint(f"  [dim]{result.plan_path}[/dim]")
+        rprint("\n[yellow]TDD agent runs in Phase 3.[/yellow]")
+    else:
+        rprint(f"\n[red]✗ Stopped at stage '{result.stage}'[/red]")
+        if result.error:
+            rprint(f"  [dim]{result.error}[/dim]")
+        raise typer.Exit(1)
 
 
 @app.command()
-def plan(description: str = typer.Argument(..., help="What to plan")):
-    """[Phase 2] Generate a plan without implementing."""
-    rprint("[yellow]'devagent plan' is coming in Phase 2.[/yellow]")
+def plan(
+    description: str = typer.Argument(..., help="What to plan"),
+    path: str = typer.Option(".", "--path", "-p", help="Project directory"),
+):
+    """Generate a plan only — no implementation."""
+    from platform.orchestrator import Orchestrator
+    from agents.plan_agent import request_approval
+
+    try:
+        config = DevAgentConfig.load(path)
+        memory_store = __import__("core.memory", fromlist=["MemoryStore"]).MemoryStore(
+            task_id=config.next_plan_id(), repo="local"
+        )
+        from agents.plan_agent import PlanAgent
+        agent  = PlanAgent(config=config, memory=memory_store)
+        result = agent.run(description)
+    except FileNotFoundError as e:
+        rprint(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+
+    if result.success:
+        plan_path = memory_store.get("plan_path")
+        plan_id   = memory_store.get("plan_id")
+        rprint(f"\n[green]Plan created:[/green] {plan_id}")
+        if plan_path:
+            rprint(f"  [dim]{plan_path}[/dim]")
+    else:
+        rprint(f"[red]Plan agent failed:[/red] {result.error}")
+        raise typer.Exit(1)
 
 
 @app.command()
-def ask(question: str = typer.Argument(..., help="Question about your project")):
-    """[Phase 2] Ask a question — answer grounded in your .ai/ context."""
-    rprint("[yellow]'devagent ask' is coming in Phase 2.[/yellow]")
+def ask(
+    question: str = typer.Argument(..., help="Question about your project"),
+    path: str = typer.Option(".", "--path", "-p", help="Project directory"),
+):
+    """Ask a question — answer grounded in your .ai/ context."""
+    from agents.ask_agent import AskAgent
+    from core.memory import MemoryStore
+
+    try:
+        config = DevAgentConfig.load(path)
+        memory = MemoryStore(task_id="ask", repo="local")
+        agent  = AskAgent(config=config, memory=memory)
+        result = agent.run(question)
+    except FileNotFoundError as e:
+        rprint(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+
+    if result.success:
+        console.print(f"\n{result.output}\n")
+    else:
+        rprint(f"[red]Ask agent failed:[/red] {result.error}")
+        raise typer.Exit(1)
 
 
 @app.command()
